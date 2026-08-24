@@ -18,7 +18,7 @@ from isaaclab.utils import configclass
 from unitree_rl_lab.assets.robots import unitree_actuators
 
 UNITREE_MODEL_DIR = "path/to/unitree_model"  # Replace with the actual path to your unitree_model directory
-UNITREE_ROS_DIR = "path/to/unitree_ros"  # Replace with the actual path to your unitree_ros package
+UNITREE_ROS_DIR = "/home/prisma-lab-ws/Scrivania/GaetanoTorella/unitree_ros"
 
 
 @configclass
@@ -295,6 +295,115 @@ UNITREE_H1_CFG = UnitreeArticulationCfg(
     ],
 )
 
+# H1_2 (handless, 27 DOF). Gains/default-pose from the official deploy config
+# (deploy/robots/h1_2/config/config.yaml, FixStand). Effort/velocity limits from the URDF.
+UNITREE_H1_2_CFG = UnitreeArticulationCfg(
+    spawn=UnitreeUrdfFileCfg(
+        asset_path=f"{UNITREE_ROS_DIR}/robots/h1_2_description/h1_2_handless.urdf",
+    ),
+    init_state=ArticulationCfg.InitialStateCfg(
+        pos=(0.0, 0.0, 1.0),
+        joint_pos={
+            ".*_hip_pitch_joint": -0.3,
+            ".*_knee_joint": 0.5,
+            ".*_ankle_pitch_joint": -0.2,
+            ".*_shoulder_pitch_joint": 0.35,
+            "left_shoulder_roll_joint": 0.25,
+            "right_shoulder_roll_joint": -0.25,
+            ".*_shoulder_yaw_joint": -0.1,
+            ".*_elbow_joint": 0.65,
+        },
+        joint_vel={".*": 0.0},
+    ),
+    actuators={
+        "hips_torso": IdealPDActuatorCfg(
+            joint_names_expr=[".*_hip_yaw_joint", ".*_hip_pitch_joint", ".*_hip_roll_joint", "torso_joint"],
+            effort_limit=200,
+            velocity_limit=23.0,
+            stiffness={".*_hip_.*": 250.0, "torso_joint": 600.0},
+            damping={".*_hip_.*": 6.5, "torso_joint": 6.0},
+            armature=0.01,
+        ),
+        "knee": IdealPDActuatorCfg(
+            joint_names_expr=[".*_knee_joint"],
+            effort_limit=300.0,
+            velocity_limit=14.0,
+            stiffness=400.0,
+            damping=10.0,
+            armature=0.01,
+        ),
+        "ankle_pitch": IdealPDActuatorCfg(
+            joint_names_expr=[".*_ankle_pitch_joint"],
+            effort_limit=60.0,
+            velocity_limit=9.0,
+            stiffness=80.0,
+            damping=1.5,
+            armature=0.01,
+        ),
+        "ankle_roll": IdealPDActuatorCfg(
+            joint_names_expr=[".*_ankle_roll_joint"],
+            effort_limit=40.0,
+            velocity_limit=9.0,
+            stiffness=40.0,
+            damping=0.4,
+            armature=0.01,
+        ),
+        "shoulder_pitch_roll": IdealPDActuatorCfg(
+            joint_names_expr=[".*_shoulder_pitch_joint", ".*_shoulder_roll_joint"],
+            effort_limit=40.0,
+            velocity_limit=9.0,
+            stiffness={".*_shoulder_pitch_joint": 250.0, ".*_shoulder_roll_joint": 400.0},
+            damping={".*_shoulder_pitch_joint": 6.0, ".*_shoulder_roll_joint": 10.0},
+            armature=0.01,
+        ),
+        "shoulder_yaw_elbow": IdealPDActuatorCfg(
+            joint_names_expr=[".*_shoulder_yaw_joint", ".*_elbow_joint"],
+            effort_limit=18.0,
+            velocity_limit=20.0,
+            stiffness=80.0,
+            damping=2.0,
+            armature=0.01,
+        ),
+        "wrist": IdealPDActuatorCfg(
+            joint_names_expr=[".*_wrist_.*_joint"],
+            effort_limit=19.0,
+            velocity_limit=31.4,
+            stiffness=20.0,
+            damping=0.5,
+            armature=0.01,
+        ),
+    },
+    joint_sdk_names=[
+        "left_hip_yaw_joint",
+        "left_hip_pitch_joint",
+        "left_hip_roll_joint",
+        "left_knee_joint",
+        "left_ankle_pitch_joint",
+        "left_ankle_roll_joint",
+        "right_hip_yaw_joint",
+        "right_hip_pitch_joint",
+        "right_hip_roll_joint",
+        "right_knee_joint",
+        "right_ankle_pitch_joint",
+        "right_ankle_roll_joint",
+        "torso_joint",
+        "left_shoulder_pitch_joint",
+        "left_shoulder_roll_joint",
+        "left_shoulder_yaw_joint",
+        "left_elbow_joint",
+        "left_wrist_roll_joint",
+        "left_wrist_pitch_joint",
+        "left_wrist_yaw_joint",
+        "right_shoulder_pitch_joint",
+        "right_shoulder_roll_joint",
+        "right_shoulder_yaw_joint",
+        "right_elbow_joint",
+        "right_wrist_roll_joint",
+        "right_wrist_pitch_joint",
+        "right_wrist_yaw_joint",
+    ],
+)
+
 UNITREE_G1_23DOF_CFG = UnitreeArticulationCfg(
     # spawn=UnitreeUrdfFileCfg(
     #     asset_path=f"{UNITREE_ROS_DIR}/robots/g1_description/g1_23dof_rev_1_0.urdf",
@@ -395,12 +504,12 @@ UNITREE_G1_23DOF_CFG = UnitreeArticulationCfg(
 )
 
 UNITREE_G1_29DOF_CFG = UnitreeArticulationCfg(
-    # spawn=UnitreeUrdfFileCfg(
-    #     asset_path=f"{UNITREE_ROS_DIR}/robots/g1_description/g1_29dof_rev_1_0.urdf",
-    # ),
-    spawn=UnitreeUsdFileCfg(
-        usd_path=f"{UNITREE_MODEL_DIR}/G1/29dof/usd/g1_29dof_rev_1_0/g1_29dof_rev_1_0.usd",
+    spawn=UnitreeUrdfFileCfg(
+        asset_path=f"{UNITREE_ROS_DIR}/robots/g1_description/g1_29dof_rev_1_0.urdf",
     ),
+    # spawn=UnitreeUsdFileCfg(
+    #     usd_path=f"{UNITREE_MODEL_DIR}/G1/29dof/usd/g1_29dof_rev_1_0/g1_29dof_rev_1_0.usd",
+    # ),
     init_state=ArticulationCfg.InitialStateCfg(
         pos=(0.0, 0.0, 0.8),
         joint_pos={

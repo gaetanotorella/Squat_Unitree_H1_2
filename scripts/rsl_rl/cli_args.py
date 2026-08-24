@@ -94,4 +94,12 @@ def update_rsl_rl_cfg(agent_cfg: RslRlOnPolicyRunnerCfg, args_cli: argparse.Name
         task_name = args_cli.task
         agent_cfg.experiment_name = task_name.lower().replace("-", "_").removesuffix("_play")
 
+    # Convert deprecated (rsl-rl < 4.0.0) `policy` config into the `actor`/`critic` model configs
+    # required by rsl-rl >= 4.0.0 (installed: 5.0.1). Mirrors IsaacLab's native train.py.
+    from importlib import metadata
+
+    from isaaclab_rl.rsl_rl import handle_deprecated_rsl_rl_cfg
+
+    agent_cfg = handle_deprecated_rsl_rl_cfg(agent_cfg, metadata.version("rsl-rl-lib"))
+
     return agent_cfg
