@@ -122,13 +122,24 @@ Produce l'eseguibile `h1_2_ctrl`.
 ## 6. Ambiente Python per il simulatore
 
 `unitree_mujoco/simulate_python` gira in Python. Sul PC di sviluppo viveva in `env_isaaclab`;
-per un PC **solo-sim** basta un ambiente leggero (conda o venv), Python ≥ 3.10:
+per un PC **solo-sim** basta un ambiente leggero, Python ≥ 3.10. **Non serve conda** — usa un `venv`:
+
+```bash
+sudo apt install -y python3-venv python3-pip
+python3 -m venv $WS/venv_sim
+source $WS/venv_sim/bin/activate
+pip install --upgrade pip
+pip install mujoco numpy pygame        # pygame serve per il joystick
+```
+
+<details><summary>In alternativa, se preferisci conda</summary>
 
 ```bash
 conda create -n unitree_sim python=3.11 -y
 conda activate unitree_sim
-pip install mujoco numpy pygame        # pygame serve per il joystick
+pip install mujoco numpy pygame
 ```
+</details>
 
 Installa i binding Python DDS di Unitree (`unitree_sdk2py`):
 ```bash
@@ -164,7 +175,7 @@ dongle collegato. Verifica: `ls /dev/input/js*` → `/dev/input/js0`.
 
 **Terminale 1 — simulatore:**
 ```bash
-conda activate unitree_sim
+source $WS/venv_sim/bin/activate     # (o: conda activate unitree_sim)
 cd $WS/unitree_mujoco/simulate_python
 python unitree_mujoco.py
 ```
