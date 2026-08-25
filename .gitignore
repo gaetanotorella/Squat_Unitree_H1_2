@@ -67,9 +67,15 @@ datasets
 # Deploy
 *.pt
 *.obj
+
+# Keep exported deploy artifacts (policy.onnx + deploy.yaml) from simulated runs,
+# ignore everything else under logs/ (checkpoints, tfevents, ...)
+**/logs/**
+!**/logs/**/
+!**/logs/**/exported/**
+!**/logs/**/params/**
 *.mtl
 *.STL
-**/env.yaml
 
 # Mimic
 *.npz
