@@ -65,21 +65,22 @@ public:
         auto action = alg->act(obs);
         action_manager->process_action(action);
 
-        // === DEBUG LOG: obs (gruppo policy) + azioni grezze, per confronto con IsaacLab ===
-        // Ordine obs: base_ang_vel(3), projected_gravity(3), velocity_commands(3),
-        //             joint_pos_rel(27), joint_vel_rel(27), last_action(27), gait_phase(2) = 92
+        // === DEBUG LOG: obs (tutti i gruppi) + azioni grezze, per confronto con IsaacLab ===
+        // Ordine obs policy: base_ang_vel(3), projected_gravity(3), velocity_commands(3),
+        //   joint_pos_rel(27), joint_vel_rel(27), last_action(27), gait_phase(2) = 92
         static std::ofstream _dbg("/tmp/deploy_obs_actions.csv");
         static bool _dbg_hdr = false;
-        auto & _o = obs["policy"];
         if (!_dbg_hdr) {
             _dbg << "time";
-            for (size_t i = 0; i < _o.size(); i++) _dbg << ",obs" << i;
+            for (auto & kv : obs)
+                for (size_t i = 0; i < kv.second.size(); i++) _dbg << "," << kv.first << i;
             for (size_t i = 0; i < action.size(); i++) _dbg << ",act" << i;
             _dbg << "\n";
             _dbg_hdr = true;
         }
         _dbg << episode_length * step_dt;
-        for (size_t i = 0; i < _o.size(); i++) _dbg << "," << _o[i];
+        for (auto & kv : obs)
+            for (size_t i = 0; i < kv.second.size(); i++) _dbg << "," << kv.second[i];
         for (size_t i = 0; i < action.size(); i++) _dbg << "," << action[i];
         _dbg << "\n";
         _dbg.flush();
