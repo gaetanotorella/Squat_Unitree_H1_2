@@ -163,7 +163,7 @@ class CommandsCfg:
     base_velocity = mdp.UniformLevelVelocityCommandCfg(
         asset_name="robot",
         resampling_time_range=(10.0, 10.0),
-        rel_standing_envs=0.02,
+        rel_standing_envs=0.2,
         rel_heading_envs=1.0,
         heading_command=False,
         debug_vis=True,
@@ -415,3 +415,9 @@ class RobotPlayEnvCfg(RobotEnvCfg):
         self.scene.terrain.terrain_generator.num_rows = 2
         self.scene.terrain.terrain_generator.num_cols = 10
         self.commands.base_velocity.ranges = self.commands.base_velocity.limit_ranges
+        
+        # === TEST: comando ZERO su tutti gli env (verifica standing in IsaacSim) ===
+        # Se i robot stanno fermi qui ma cadono in MuJoCo -> gap sim2sim, non policy.
+        self.commands.base_velocity.ranges = mdp.UniformLevelVelocityCommandCfg.Ranges(
+            lin_vel_x=(0.0, 0.0), lin_vel_y=(0.0, 0.0), ang_vel_z=(0.0, 0.0)
+        )
