@@ -11,6 +11,10 @@
 #include "isaaclab/algorithms/algorithms.h"
 #include <iostream>
 #include <fstream>
+#include <filesystem>
+#include <iomanip>
+#include <chrono>
+#include <cstdlib>
 #include "isaaclab/utils/utils.h"
 
 namespace isaaclab
@@ -65,25 +69,82 @@ public:
         auto action = alg->act(obs);
         action_manager->process_action(action);
 
-        // === DEBUG LOG: obs (tutti i gruppi) + azioni grezze, per confronto con IsaacLab ===
-        // Ordine obs policy: base_ang_vel(3), projected_gravity(3), velocity_commands(3),
-        //   joint_pos_rel(27), joint_vel_rel(27), last_action(27), gait_phase(2) = 92
-        static std::ofstream _dbg("/tmp/deploy_obs_actions.csv");
-        static bool _dbg_hdr = false;
-        if (!_dbg_hdr) {
-            _dbg << "time";
+        log_step(obs);
+    }
+
+    // === LOG STRUTTURATO: obs.csv / commands.csv / errors.csv ===
+    // Scrive nella cartella sim_logs/sim_<ts>/ creata dal simulatore (piu' recente);
+    // fallback a sim_controller_only/ se il simulatore non ne ha create.
+    // Allineamento col ground_truth via wall_t (orologio di sistema).
+    void log_step(std::unordered_map<std::string, std::vector<float>> & obs)
+    {
+        static std::ofstream obs_out, cmd_out, err_out;
+        static bool init = false;
+
+        auto q_target = action_manager->processed_actions();
+        auto & kp = robot->data.joint_stiffness;
+        auto & kd = robot->data.joint_damping;
+
+        if (!init) {
+            init = true;
+            const char * home = std::getenv("HOME");
+            std::filesystem::path base = std::string(home ? home : ".") + "/sim_logs";
+            std::filesystem::path run_dir;
+            std::error_code ec;
+            std::string best;
+            if (std::filesystem::exists(base, ec)) {
+                for (auto & e : std::filesystem::directory_iterator(base, ec)) {
+                    if (!e.is_directory()) continue;
+                    std::string name = e.path().filename().string();
+                    if (name.rfind("sim_", 0) == 0 && name > best) best = name;
+                }
+            }
+            if (!best.empty()) run_dir = base / best;
+            else { run_dir = base / "sim_controller_only"; std::filesystem::create_directories(run_dir, ec); }
+
+            obs_out.open((run_dir / "obs.csv").string());
+            cmd_out.open((run_dir / "commands.csv").string());
+            err_out.open((run_dir / "errors.csv").string());
+
+            obs_out << "wall_t,ep_t";
             for (auto & kv : obs)
-                for (size_t i = 0; i < kv.second.size(); i++) _dbg << "," << kv.first << i;
-            for (size_t i = 0; i < action.size(); i++) _dbg << ",act" << i;
-            _dbg << "\n";
-            _dbg_hdr = true;
+                for (size_t i = 0; i < kv.second.size(); i++) obs_out << "," << kv.first << "_" << i;
+            obs_out << "\n";
+
+            cmd_out << "wall_t,ep_t";
+            for (size_t i = 0; i < q_target.size(); i++) cmd_out << ",q_target_" << i;
+            for (size_t i = 0; i < kp.size(); i++) cmd_out << ",kp_" << i;
+            for (size_t i = 0; i < kd.size(); i++) cmd_out << ",kd_" << i;
+            cmd_out << "\n";
+
+            err_out << "wall_t,ep_t";
+            for (size_t i = 0; i < q_target.size(); i++) err_out << ",q_err_" << i;
+            err_out << "\n";
+
+            std::cout << "[deploy_logger] obs/commands/errors -> " << run_dir << std::endl;
         }
-        _dbg << episode_length * step_dt;
+
+        double wall_t = std::chrono::duration<double>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        double ep_t = episode_length * step_dt;
+
+        obs_out << std::setprecision(7) << wall_t << "," << ep_t;
         for (auto & kv : obs)
-            for (size_t i = 0; i < kv.second.size(); i++) _dbg << "," << kv.second[i];
-        for (size_t i = 0; i < action.size(); i++) _dbg << "," << action[i];
-        _dbg << "\n";
-        _dbg.flush();
+            for (size_t i = 0; i < kv.second.size(); i++) obs_out << "," << kv.second[i];
+        obs_out << "\n"; obs_out.flush();
+
+        cmd_out << std::setprecision(7) << wall_t << "," << ep_t;
+        for (size_t i = 0; i < q_target.size(); i++) cmd_out << "," << q_target[i];
+        for (size_t i = 0; i < kp.size(); i++) cmd_out << "," << kp[i];
+        for (size_t i = 0; i < kd.size(); i++) cmd_out << "," << kd[i];
+        cmd_out << "\n"; cmd_out.flush();
+
+        err_out << std::setprecision(7) << wall_t << "," << ep_t;
+        for (size_t i = 0; i < q_target.size(); i++) {
+            float q_meas = (i < (size_t)robot->data.joint_pos.size()) ? robot->data.joint_pos[i] : 0.0f;
+            err_out << "," << (q_target[i] - q_meas);
+        }
+        err_out << "\n"; err_out.flush();
     }
 
     float step_dt;
