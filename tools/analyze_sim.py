@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Analisi quantitativa di un run sim2sim (MuJoCo C++ + controller di deploy).
 
-Legge i 4 CSV prodotti in sim_logs/sim_<ts>/:
+Legge i 4 CSV prodotti in unitree_ws/sim_logs/sim_<ts>/:
   - ground_truth.csv : stato VERO della base dal simulatore (posa + velocita')
   - obs.csv          : tutte le osservazioni in input al controller
   - commands.csv     : comandi inviati al robot (q_target, kp, kd)
@@ -11,7 +11,7 @@ Allinea controller <-> ground_truth tramite wall_t (orologio di sistema).
 Genera i plot in una sottocartella plots/ e stampa le metriche a schermo.
 
 Uso:
-    python3 analyze_sim.py [cartella_run]     # default: ultima sim_* in ~/sim_logs
+    python3 analyze_sim.py [cartella_run]     # default: ultima sim_* in ~/unitree_ws/sim_logs
 """
 import os
 import sys
@@ -25,7 +25,7 @@ import matplotlib.pyplot as plt
 
 # ----------------------------------------------------------------------------- utils
 def latest_run():
-    base = os.path.join(os.path.expanduser("~"), "sim_logs")
+    base = os.path.join(os.path.expanduser("~"), "unitree_ws/sim_logs")
     runs = sorted(glob.glob(os.path.join(base, "sim_*")))
     if not runs:
         sys.exit(f"Nessun run trovato in {base}")

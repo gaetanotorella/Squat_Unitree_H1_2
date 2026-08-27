@@ -73,7 +73,7 @@ public:
     }
 
     // === LOG STRUTTURATO: obs.csv / commands.csv / errors.csv ===
-    // Scrive nella cartella sim_logs/sim_<ts>/ creata dal simulatore (piu' recente);
+    // Scrive nella cartella unitree_ws/sim_logs/sim_<ts>/ creata dal simulatore (piu' recente);
     // fallback a sim_controller_only/ se il simulatore non ne ha create.
     // Allineamento col ground_truth via wall_t (orologio di sistema).
     void log_step(std::unordered_map<std::string, std::vector<float>> & obs)
@@ -88,7 +88,7 @@ public:
         if (!init) {
             init = true;
             const char * home = std::getenv("HOME");
-            std::filesystem::path base = std::string(home ? home : ".") + "/sim_logs";
+            std::filesystem::path base = std::string(home ? home : ".") + "/unitree_ws/sim_logs";
             std::filesystem::path run_dir;
             std::error_code ec;
             std::string best;
