@@ -7,6 +7,10 @@ dell'H1-2 su una macchina **Ubuntu 22.04 pulita**.
 > **NON** serve IsaacSim / IsaacLab / `env_isaaclab` (quelli servono solo per addestrare).
 > Il modello addestrato è già versionato nella repo (`policy.onnx` + `deploy.yaml`).
 
+> 🖥️ **Setup a due PC**: il training (IsaacSim/IsaacLab) gira su un PC; la **simulazione sim2sim gira su un ALTRO PC** (questa guida è per quel PC-simulazione). Trasferisci il repo `Squat_Unitree_H1_2` (con `policy.onnx` + `deploy.yaml`) e il fork `unitree_mujoco` sul PC-simulazione.
+
+> Il simulatore ha **due frontend**: `simulate_python` (Python, semplice) e `simulate` (**C++**, timing deterministico, meno jitter di latenza → più vicino al robot reale). Vedi la sezione **10. Simulatore C++** in fondo.
+
 ---
 
 ## 0. Componenti e layout
@@ -222,3 +226,34 @@ Deve stampare `Connected rt/lowstate` → `Connected to robot.` e caricare la `p
 | mujoco, pygame | pip | simulatore Python + joystick |
 
 **Non serve** su un PC solo-sim: IsaacSim, IsaacLab, `unitree_ros`, l'ambiente `env_isaaclab`.
+
+---
+
+## 10. Simulatore C++ (alternativa a simulate_python)
+
+Il frontend C++ (`unitree_mujoco/simulate`) ha timing **deterministico** (niente GIL/thread-jitter del Python) → latenza più pulita, più vicina al robot reale. Il suo bridge sceglie automaticamente il tipo robot dal numero di attuatori (`m->nu > 20` → G1Bridge, IDL `unitree_hg`), quindi l'**h1_2 (27 giunti) funziona senza modifiche al codice**.
+
+**Build** (sul PC-simulazione; usa la stessa versione MuJoCo del Python, qui 3.7.0):
+```bash
+sudo apt install -y libglfw3-dev          # yaml-cpp/boost/unitree_sdk2 già presenti
+cd ~/unitree_ws
+wget https://github.com/google-deepmind/mujoco/releases/download/3.7.0/mujoco-3.7.0-linux-x86_64.tar.gz
+tar xzf mujoco-3.7.0-linux-x86_64.tar.gz
+ln -s ~/unitree_ws/mujoco-3.7.0 ~/unitree_ws/unitree_mujoco/simulate/mujoco  # CMake si aspetta simulate/mujoco/{include,lib,simulate}
+cd ~/unitree_ws/unitree_mujoco/simulate && mkdir -p build && cd build
+cmake .. && make                          # -> eseguibile ./unitree_mujoco
+```
+(Se il release MuJoCo non contiene `simulate/`, i sorgenti del viewer vanno presi dal sorgente MuJoCo — vedi README ufficiale unitree_mujoco.)
+
+**Config**: il C++ legge `simulate/config.yaml` (NON `config.py`). Imposta:
+```yaml
+robot: "h1_2"
+robot_scene: "scene.xml"
+domain_id: 0
+interface: "lo"
+use_joystick: 1
+enable_elastic_band: 1
+```
+
+**Run**: `./unitree_mujoco` (Term.1) + `./h1_2_ctrl --network lo` (Term.2), stessa sequenza FSM (LT+Up → RB+X → rilascio molla). Tasti elastic band nella finestra: `8`/`7`/`9`.
+
