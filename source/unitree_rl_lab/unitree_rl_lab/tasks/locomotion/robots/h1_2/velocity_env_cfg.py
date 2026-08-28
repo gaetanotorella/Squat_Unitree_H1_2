@@ -253,16 +253,18 @@ class RewardsCfg:
     dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-5.0)
     energy = RewTerm(func=mdp.energy, weight=-2e-5)
 
-    # A2: penalizza la deviazione dalla posa di default SOLO a comando ~0 -> ferma la marcia residua
+    # A2: penalizza la deviazione dalla posa di default SOLO a comando ~0 -> ferma la marcia residua.
+    # NB: mdp.stand_still e' una SOMMA non normalizzata su 27 giunti -> peso piccolo, altrimenti
+    # a inizio training (giunti lontani dal default) la penalita' domina -> policy "suicida".
     stand_still = RewTerm(
         func=mdp.stand_still,
-        weight=-0.5,
+        weight=-0.05,
         params={"command_name": "base_velocity"},
     )
 
     joint_deviation_arms = RewTerm(
         func=mdp.joint_deviation_l1,
-        weight=-0.25,  # A3: tiene le braccia piu' ferme (era -0.1)
+        weight=-0.15,  # A3: tiene le braccia piu' ferme (era -0.1; -0.25 troppo aggressivo a inizio training)
         params={
             "asset_cfg": SceneEntityCfg(
                 "robot",
