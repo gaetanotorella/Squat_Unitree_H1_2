@@ -15,6 +15,7 @@
 #include <iomanip>
 #include <chrono>
 #include <cstdlib>
+#include <cstdio>
 #include "isaaclab/utils/utils.h"
 
 namespace isaaclab
@@ -127,19 +128,21 @@ public:
         double wall_t = std::chrono::duration<double>(
             std::chrono::system_clock::now().time_since_epoch()).count();
         double ep_t = episode_length * step_dt;
+        char wbuf[32];
+        std::snprintf(wbuf, sizeof(wbuf), "%.6f", wall_t); // parte intera + microsec
 
-        obs_out << std::setprecision(7) << wall_t << "," << ep_t;
+        obs_out << wbuf << "," << std::setprecision(7) << ep_t;
         for (auto & kv : obs)
             for (size_t i = 0; i < kv.second.size(); i++) obs_out << "," << kv.second[i];
         obs_out << "\n"; obs_out.flush();
 
-        cmd_out << std::setprecision(7) << wall_t << "," << ep_t;
+        cmd_out << wbuf << "," << std::setprecision(7) << ep_t;
         for (size_t i = 0; i < q_target.size(); i++) cmd_out << "," << q_target[i];
         for (size_t i = 0; i < kp.size(); i++) cmd_out << "," << kp[i];
         for (size_t i = 0; i < kd.size(); i++) cmd_out << "," << kd[i];
         cmd_out << "\n"; cmd_out.flush();
 
-        err_out << std::setprecision(7) << wall_t << "," << ep_t;
+        err_out << wbuf << "," << std::setprecision(7) << ep_t;
         for (size_t i = 0; i < q_target.size(); i++) {
             float q_meas = (i < (size_t)robot->data.joint_pos.size()) ? robot->data.joint_pos[i] : 0.0f;
             err_out << "," << (q_target[i] - q_meas);
