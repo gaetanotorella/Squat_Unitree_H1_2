@@ -55,6 +55,48 @@ def stand_still_zero_cmd(
 
 
 """
+Squat (base height) rewards.
+"""
+
+
+def track_base_height_exp(
+    env: ManagerBasedRLEnv,
+    std: float,
+    command_name: str = "base_height",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Track the commanded base height with an exponential kernel: exp(-(h - h_cmd)^2 / std^2).
+
+    Uses the TRUE base height (privileged) in the reward -- fine, rewards are training-only.
+    This is the primary squat task term.
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    target = env.command_manager.get_command(command_name).squeeze(-1)  # (N,)
+    base_h = asset.data.root_pos_w[:, 2]
+    error = torch.square(base_h - target)
+    return torch.exp(-error / std**2)
+
+
+def lin_vel_z_gated(
+    env: ManagerBasedRLEnv,
+    command_name: str = "base_height",
+    height_tol: float = 0.05,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Penalize vertical base velocity ONLY when already near the commanded height.
+
+    During the squat transition the base MUST move vertically, so penalizing vz there would
+    fight the task. This term activates (penalizes vz^2) only once |h - h_cmd| < height_tol,
+    encouraging the robot to settle and hold the target height without bouncing.
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    target = env.command_manager.get_command(command_name).squeeze(-1)
+    base_h = asset.data.root_pos_w[:, 2]
+    near_target = (torch.abs(base_h - target) < height_tol).float()
+    return torch.square(asset.data.root_lin_vel_b[:, 2]) * near_target
+
+
+"""
 Robot.
 """
 

@@ -3,8 +3,34 @@ from __future__ import annotations
 import torch
 from typing import TYPE_CHECKING
 
+from isaaclab.managers import SceneEntityCfg
+
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
+
+
+def base_height_command_rel(
+    env: ManagerBasedRLEnv, command_name: str = "base_height", nominal_height: float = 0.98
+) -> torch.Tensor:
+    """Target squat height relative to the nominal standing height (target - nominal).
+
+    Centered around 0 (0 = stand, negative = squat). Reproducible on the real robot:
+    it is the operator's height command, not a measurement.
+    """
+    cmd = env.command_manager.get_command(command_name)  # (N, 1) absolute target
+    return cmd - nominal_height
+
+
+def base_height_rel(
+    env: ManagerBasedRLEnv, nominal_height: float = 0.98, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """TRUE base height relative to nominal (measured). PRIVILEGED -> critic only.
+
+    Not available on the real robot (no absolute base-height sensor), so it must never be
+    added to the actor's policy observation group.
+    """
+    asset = env.scene[asset_cfg.name]
+    return asset.data.root_pos_w[:, 2:3] - nominal_height
 
 
 def gait_phase(

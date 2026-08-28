@@ -150,5 +150,29 @@ REGISTER_OBSERVATION(gait_phase)
     return obs;
 }
 
+// Squat task: target base height relative to nominal (target - nominal), matching the training
+// obs mdp.base_height_command_rel. Used ONLY by the squat controller (h1_2_ctrl_squat); harmless
+// for the velocity controller, whose deploy.yaml does not list it.
+REGISTER_OBSERVATION(base_height_command)
+{
+    const float nominal = params["nominal_height"].as<float>();
+    const auto range = env->cfg["commands"]["base_height"]["ranges"]["height"];
+    const float h_min = range[0].as<float>();
+    const float h_max = range[1].as<float>();
+
+    auto & joystick = env->robot->data.joystick;
+    // Continuous height axis on the right-stick Y: +1 (up) -> stand, -1 (down) -> deepest squat.
+    // NOTE: verify axis + sign on the real pad; flip if needed.
+    float u = std::clamp((joystick->ry() + 1.0f) * 0.5f, 0.0f, 1.0f);  // [0,1]
+    float target = h_min + u * (h_max - h_min);
+
+    // TODO(deploy): "preset" button -> snap target to nominal (stand up) while held.
+    // e.g. if (joystick->A()) target = nominal;  // wire to the actual button API
+
+    std::vector<float> obs(1);
+    obs[0] = target - nominal;
+    return obs;
+}
+
 }
 }

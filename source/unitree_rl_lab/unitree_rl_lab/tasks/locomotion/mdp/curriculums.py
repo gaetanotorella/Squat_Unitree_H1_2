@@ -37,6 +37,45 @@ def lin_vel_cmd_levels(
     return torch.tensor(ranges.lin_vel_x[1], device=env.device)
 
 
+def height_cmd_levels(
+    env: ManagerBasedRLEnv,
+    env_ids: Sequence[int],
+    height_command_name: str = "base_height",
+    lin_vel_reward_name: str = "track_lin_vel_xy",
+    height_reward_name: str = "track_base_height",
+    step: float = 0.05,
+    lin_vel_thresh_ratio: float = 0.8,
+    height_thresh_ratio: float = 0.8,
+) -> torch.Tensor:
+    """Lower the minimum commanded squat height, gated on competence.
+
+    The minimum of ``ranges.height`` is decreased by ``step`` (toward ``limit_ranges.height[0]``)
+    only when BOTH locomotion tracking (``track_lin_vel_xy``) AND current height tracking
+    (``track_base_height``) are good. This realises "learn to walk/stand first, then squat":
+    while the robot is still learning to walk, the squat depth does not increase.
+
+    Returns the current minimum commanded height (for logging).
+    """
+    cmd_term = env.command_manager.get_term(height_command_name)
+    ranges = cmd_term.cfg.ranges
+    limit_ranges = cmd_term.cfg.limit_ranges
+
+    rm = env.reward_manager
+    lin_reward = torch.mean(rm._episode_sums[lin_vel_reward_name][env_ids]) / env.max_episode_length_s
+    height_reward = torch.mean(rm._episode_sums[height_reward_name][env_ids]) / env.max_episode_length_s
+    lin_weight = rm.get_term_cfg(lin_vel_reward_name).weight
+    height_weight = rm.get_term_cfg(height_reward_name).weight
+
+    if env.common_step_counter % env.max_episode_length == 0:
+        walk_ok = lin_reward > lin_weight * lin_vel_thresh_ratio
+        height_ok = height_reward > height_weight * height_thresh_ratio
+        if walk_ok and height_ok:
+            new_min = max(ranges.height[0] - step, limit_ranges.height[0])
+            ranges.height = (new_min, ranges.height[1])
+
+    return torch.tensor(ranges.height[0], device=env.device)
+
+
 def ang_vel_cmd_levels(
     env: ManagerBasedRLEnv,
     env_ids: Sequence[int],
