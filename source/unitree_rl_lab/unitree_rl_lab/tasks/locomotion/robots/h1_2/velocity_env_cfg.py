@@ -163,7 +163,7 @@ class CommandsCfg:
     base_velocity = mdp.UniformLevelVelocityCommandCfg(
         asset_name="robot",
         resampling_time_range=(10.0, 10.0),
-        rel_standing_envs=0.2,
+        rel_standing_envs=0.4,  # A1: piu' esempi di standing puro (era 0.2) -> meno barcollio
         rel_heading_envs=1.0,
         heading_command=False,
         debug_vis=True,
@@ -249,13 +249,20 @@ class RewardsCfg:
     base_angular_velocity = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.05)
     joint_vel = RewTerm(func=mdp.joint_vel_l2, weight=-0.001)
     joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-5.0e-7)
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.1)
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.15)  # B2: azioni piu' morbide (era -0.1)
     dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-5.0)
     energy = RewTerm(func=mdp.energy, weight=-2e-5)
 
+    # A2: penalizza la deviazione dalla posa di default SOLO a comando ~0 -> ferma la marcia residua
+    stand_still = RewTerm(
+        func=mdp.stand_still,
+        weight=-0.5,
+        params={"command_name": "base_velocity"},
+    )
+
     joint_deviation_arms = RewTerm(
         func=mdp.joint_deviation_l1,
-        weight=-0.1,
+        weight=-0.25,  # A3: tiene le braccia piu' ferme (era -0.1)
         params={
             "asset_cfg": SceneEntityCfg(
                 "robot",
@@ -316,7 +323,7 @@ class RewardsCfg:
     )
     feet_contact_forces = RewTerm(
         func=mdp.contact_forces,
-        weight=-0.0002,
+        weight=-0.0005,  # B2: ammorbidisce gli impatti al suolo (era -0.0002)
         params={
             "threshold": 500,
             "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*"),
