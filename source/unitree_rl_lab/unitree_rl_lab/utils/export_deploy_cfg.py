@@ -26,6 +26,7 @@ def export_deploy_cfg(env: ManagerBasedRLEnv, log_dir):
 
     cfg = {}  # noqa: SIM904
     cfg["joint_ids_map"] = joint_ids_map
+    cfg["joint_names"] = list(asset.data.joint_names)  # ordine-policy, per etichettare i log/CSV
     cfg["step_dt"] = env.cfg.sim.dt * env.cfg.decimation
     stiffness = np.zeros(len(joint_sdk_names))
     stiffness[joint_ids_map] = asset.data.default_joint_stiffness[0].detach().cpu().numpy().tolist()

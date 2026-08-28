@@ -1,5 +1,13 @@
 joint_ids_map: [0, 6, 12, 1, 7, 13, 20, 2, 8, 14, 21, 3, 9, 15, 22, 4, 10, 16, 23,
   5, 11, 17, 24, 18, 25, 19, 26]
+joint_names: [left_hip_yaw_joint, right_hip_yaw_joint, torso_joint, left_hip_pitch_joint,
+  right_hip_pitch_joint, left_shoulder_pitch_joint, right_shoulder_pitch_joint,
+  left_hip_roll_joint, right_hip_roll_joint, left_shoulder_roll_joint,
+  right_shoulder_roll_joint, left_knee_joint, right_knee_joint, left_shoulder_yaw_joint,
+  right_shoulder_yaw_joint, left_ankle_pitch_joint, right_ankle_pitch_joint,
+  left_elbow_joint, right_elbow_joint, left_ankle_roll_joint, right_ankle_roll_joint,
+  left_wrist_roll_joint, right_wrist_roll_joint, left_wrist_pitch_joint,
+  right_wrist_pitch_joint, left_wrist_yaw_joint, right_wrist_yaw_joint]
 step_dt: 0.02
 stiffness: [250.0, 250.0, 250.0, 400.0, 80.0, 40.0, 250.0, 250.0, 250.0, 400.0, 80.0,
   40.0, 600.0, 250.0, 400.0, 80.0, 80.0, 20.0, 20.0, 20.0, 250.0, 400.0, 80.0, 80.0,

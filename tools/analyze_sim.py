@@ -78,6 +78,21 @@ def quat_to_rpy(q):
     return roll, pitch, yaw
 
 
+def jmat(df, suffix, fb_prefix, fb_off):
+    """Matrice (N,27) in ordine-policy: prova colonne <giunto>_<suffix> (nuove),
+    altrimenti fallback posizionale <fb_prefix><fb_off+i> (CSV vecchi)."""
+    named = [f"{n}_{suffix}" for n in JOINT_NAMES]
+    if all(c in df.columns for c in named):
+        return df[named].to_numpy()
+    return df[[f"{fb_prefix}{fb_off + i}" for i in range(27)]].to_numpy()
+
+
+def vecc(df, named, fb):
+    """Colonne nominate (nuove) o fallback posizionale (vecchie)."""
+    cols = named if all(c in df.columns for c in named) else fb
+    return df[cols].to_numpy()
+
+
 # famiglie per riga (torso escluso: e' l'unico giunto di tronco)
 FAMILIES = {"legs": ["hip", "knee", "ankle"], "arms": ["shoulder", "elbow", "wrist"]}
 
@@ -129,7 +144,7 @@ def main():
 
     # ---- posizione VERA dei giunti = joint_pos_rel (obs 9:36) + default
     t_obs = obs["ep_t"].to_numpy()
-    jpos_rel = obs[[f"obs_{i}" for i in range(9, 36)]].to_numpy()
+    jpos_rel = jmat(obs, "pos", "obs_", 9)  # joint_pos_rel (nuovo: <giunto>_pos)
     jpos = jpos_rel + DEFAULT_JOINT_POS  # broadcasting su 27 colonne
     plot_part(t_obs, jpos, "legs", "Posizione giunti - GAMBE", "q [rad]",
               os.path.join(outdir, "01_joint_pos_legs.png"))
@@ -138,7 +153,7 @@ def main():
 
     # ---- errore di posizione (q_target - q_misurato) da errors.csv
     t_err = err["ep_t"].to_numpy()
-    qerr = err[[f"q_err_{i}" for i in range(27)]].to_numpy()
+    qerr = jmat(err, "q_err", "q_err_", 0)
     plot_part(t_err, qerr, "legs", "Errore posizione giunti - GAMBE", "err [rad]",
               os.path.join(outdir, "03_joint_err_legs.png"))
     plot_part(t_err, qerr, "arms", "Errore posizione giunti - BRACCIA", "err [rad]",
@@ -146,7 +161,7 @@ def main():
 
     # ---- comandi della policy q_target da commands.csv
     t_cmd = cmd["ep_t"].to_numpy()
-    qtgt = cmd[[f"q_target_{i}" for i in range(27)]].to_numpy()
+    qtgt = jmat(cmd, "q_target", "q_target_", 0)
     plot_part(t_cmd, qtgt, "legs", "Comandi policy q_target - GAMBE", "q_target [rad]",
               os.path.join(outdir, "06_cmd_legs.png"))
     plot_part(t_cmd, qtgt, "arms", "Comandi policy q_target - BRACCIA", "q_target [rad]",
@@ -171,19 +186,24 @@ def main():
     # ---- tutte le altre osservazioni
     fig, ax = plt.subplots(3, 2, figsize=(13, 9))
     ax = ax.ravel()
-    def sl(a, b): return obs[[f"obs_{i}" for i in range(a, b)]].to_numpy()
+    bav = vecc(obs, ["base_ang_vel_0", "base_ang_vel_1", "base_ang_vel_2"], ["obs_0", "obs_1", "obs_2"])
+    pg = vecc(obs, ["projected_gravity_0", "projected_gravity_1", "projected_gravity_2"], ["obs_3", "obs_4", "obs_5"])
+    vc = vecc(obs, ["velocity_commands_0", "velocity_commands_1", "velocity_commands_2"], ["obs_6", "obs_7", "obs_8"])
+    gp = vecc(obs, ["gait_phase_0", "gait_phase_1"], ["obs_90", "obs_91"])
+    jv = jmat(obs, "vel", "obs_", 36)  # joint_vel_rel
+    la = jmat(obs, "act", "obs_", 63)  # last_action
     for k, lab in zip(range(3), ["wx", "wy", "wz"]):
-        ax[0].plot(t_obs, sl(0, 3)[:, k], label=lab)
+        ax[0].plot(t_obs, bav[:, k], label=lab)
     ax[0].set_title("base_ang_vel (scalata 0.2)"); ax[0].legend(fontsize=7)
     for k, lab in zip(range(3), ["gx", "gy", "gz"]):
-        ax[1].plot(t_obs, sl(3, 6)[:, k], label=lab)
+        ax[1].plot(t_obs, pg[:, k], label=lab)
     ax[1].set_title("projected_gravity"); ax[1].legend(fontsize=7)
     for k, lab in zip(range(3), ["vx", "vy", "wz"]):
-        ax[2].plot(t_obs, sl(6, 9)[:, k], label=lab)
+        ax[2].plot(t_obs, vc[:, k], label=lab)
     ax[2].set_title("velocity_commands"); ax[2].legend(fontsize=7)
-    ax[3].plot(t_obs, sl(90, 92)); ax[3].set_title("gait_phase (sin, cos)")
-    ax[4].plot(t_obs, sl(36, 63), lw=0.6); ax[4].set_title("joint_vel_rel (27, scalata 0.05)")
-    ax[5].plot(t_obs, sl(63, 90), lw=0.6); ax[5].set_title("last_action (27)")
+    ax[3].plot(t_obs, gp); ax[3].set_title("gait_phase (sin, cos)")
+    ax[4].plot(t_obs, jv, lw=0.6); ax[4].set_title("joint_vel_rel (27, scalata 0.05)")
+    ax[5].plot(t_obs, la, lw=0.6); ax[5].set_title("last_action (27)")
     for a in ax:
         a.grid(alpha=0.3); a.tick_params(labelsize=7); a.set_xlabel("t [s]", fontsize=8)
     fig.suptitle("Altre osservazioni", fontsize=12)
