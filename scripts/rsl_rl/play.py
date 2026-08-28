@@ -153,6 +153,12 @@ def main():
         export_policy_as_jit(policy_nn, normalizer=normalizer, path=export_model_dir, filename="policy.pt")
         export_policy_as_onnx(policy_nn, normalizer=normalizer, path=export_model_dir, filename="policy.onnx")
 
+    # regenerate deploy.yaml from the (play) env cfg so it stays consistent with the exported policy.
+    # Uses limit_ranges -> ensures e.g. commands.base_height is present for the squat controller.
+    from unitree_rl_lab.utils.export_deploy_cfg import export_deploy_cfg
+
+    export_deploy_cfg(env.unwrapped, os.path.dirname(resume_path))
+
     dt = env.unwrapped.step_dt
 
     # reset environment

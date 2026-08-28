@@ -48,6 +48,15 @@ def export_deploy_cfg(env: ManagerBasedRLEnv, log_dir):
             ranges[item_name] = list(ranges[item_name])
         cfg["commands"]["base_velocity"]["ranges"] = ranges
 
+    if hasattr(env.cfg.commands, "base_height"):  # squat task: base-height command
+        cfg["commands"]["base_height"] = {}
+        if hasattr(env.cfg.commands.base_height, "limit_ranges"):
+            ranges = env.cfg.commands.base_height.limit_ranges.to_dict()
+        else:
+            ranges = env.cfg.commands.base_height.ranges.to_dict()
+        ranges["height"] = list(ranges["height"])
+        cfg["commands"]["base_height"]["ranges"] = ranges
+
     # --- actions ---
     action_names = env.action_manager.active_terms
     action_terms = zip(action_names, env.action_manager._terms.values())

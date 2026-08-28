@@ -207,6 +207,7 @@ public:
     std::unique_ptr<Algorithms> alg;
     long episode_length = 0;
     float global_phase = 0.0f;
+    float squat_target = 0.98f;  // squat task: current commanded base height [m] (held between steps)
 };
 
 };

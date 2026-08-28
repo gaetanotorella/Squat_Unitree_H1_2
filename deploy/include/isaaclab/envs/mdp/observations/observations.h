@@ -157,20 +157,22 @@ REGISTER_OBSERVATION(base_height_command)
 {
     const float nominal = params["nominal_height"].as<float>();
     const auto range = env->cfg["commands"]["base_height"]["ranges"]["height"];
-    const float h_min = range[0].as<float>();
-    const float h_max = range[1].as<float>();
+    const float h_min = range[0].as<float>();  // deepest squat (e.g. 0.55)
+    const float h_max = range[1].as<float>();  // nominal / standing (e.g. 0.98)
 
     auto & joystick = env->robot->data.joystick;
-    // Continuous height axis on the right-stick Y: +1 (up) -> stand, -1 (down) -> deepest squat.
-    // NOTE: verify axis + sign on the real pad; flip if needed.
-    float u = std::clamp((joystick->ry() + 1.0f) * 0.5f, 0.0f, 1.0f);  // [0,1]
-    float target = h_min + u * (h_max - h_min);
+    const float descend_rate = 0.30f;  // [m/s] descent speed while RT is held
 
-    // TODO(deploy): "preset" button -> snap target to nominal (stand up) while held.
-    // e.g. if (joystick->A()) target = nominal;  // wire to the actual button API
+    // RT (R2) is digital on this pad -> "hold to squat": the longer RT is held, the deeper.
+    // B -> return to standing (snap to nominal). Held state lives in env->squat_target.
+    if (joystick->B.pressed)
+        env->squat_target = nominal;
+    else if (joystick->RT.pressed)
+        env->squat_target -= descend_rate * env->step_dt;
+    env->squat_target = std::clamp(env->squat_target, h_min, h_max);
 
     std::vector<float> obs(1);
-    obs[0] = target - nominal;
+    obs[0] = env->squat_target - nominal;  // matches training obs base_height_command_rel
     return obs;
 }
 
