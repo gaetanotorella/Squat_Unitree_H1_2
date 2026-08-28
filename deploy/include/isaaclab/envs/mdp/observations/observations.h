@@ -133,6 +133,20 @@ REGISTER_OBSERVATION(gait_phase)
     std::vector<float> obs(2);
     obs[0] = std::sin(env->global_phase * 2 * M_PI);
     obs[1] = std::cos(env->global_phase * 2 * M_PI);
+
+    // Opzione C: congela il clock a (0,0) quando il comando joystick e' ~0 (soglia 0.1).
+    // IDENTICO al training (mdp.gait_phase con command_name="base_velocity"): il clock interno
+    // continua ad avanzare, ma l'output e' azzerato da fermo -> niente dondolio 1.25 Hz.
+    auto & joystick = env->robot->data.joystick;
+    const auto cmd_cfg = env->cfg["commands"]["base_velocity"]["ranges"];
+    float vx = std::clamp(joystick->ly(), cmd_cfg["lin_vel_x"][0].as<float>(), cmd_cfg["lin_vel_x"][1].as<float>());
+    float vy = std::clamp(-joystick->lx(), cmd_cfg["lin_vel_y"][0].as<float>(), cmd_cfg["lin_vel_y"][1].as<float>());
+    float wz = std::clamp(-joystick->rx(), cmd_cfg["ang_vel_z"][0].as<float>(), cmd_cfg["ang_vel_z"][1].as<float>());
+    if (std::sqrt(vx * vx + vy * vy + wz * wz) <= 0.1f)
+    {
+        obs[0] = 0.0f;
+        obs[1] = 0.0f;
+    }
     return obs;
 }
 
