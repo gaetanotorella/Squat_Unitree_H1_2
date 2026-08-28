@@ -38,6 +38,22 @@ def stand_still(
     return reward * (cmd_norm < 0.1)
 
 
+def stand_still_zero_cmd(
+    env: ManagerBasedRLEnv, command_name: str = "base_velocity", asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """Penalize joint deviation from default pose ONLY on the true standing envs.
+
+    Gates on the command term's ``is_standing_env`` mask (envs whose command is forced to zero),
+    NOT on ``cmd_norm < threshold``. This avoids penalizing the leg motion needed to TRACK small
+    commands, so it never deadlocks with the command curriculum. Meant for anti-sway finetuning.
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+
+    reward = torch.sum(torch.abs(asset.data.joint_pos - asset.data.default_joint_pos), dim=1)
+    is_standing = env.command_manager.get_term(command_name).is_standing_env
+    return reward * is_standing
+
+
 """
 Robot.
 """

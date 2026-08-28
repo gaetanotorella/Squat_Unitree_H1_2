@@ -163,7 +163,7 @@ class CommandsCfg:
     base_velocity = mdp.UniformLevelVelocityCommandCfg(
         asset_name="robot",
         resampling_time_range=(10.0, 10.0),
-        rel_standing_envs=0.4,  # A1: piu' esempi di standing puro (era 0.2) -> meno barcollio
+        rel_standing_envs=0.2,
         rel_heading_envs=1.0,
         heading_command=False,
         debug_vis=True,
@@ -248,23 +248,22 @@ class RewardsCfg:
     base_linear_velocity = RewTerm(func=mdp.lin_vel_z_l2, weight=-2.0)
     base_angular_velocity = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.05)
     joint_vel = RewTerm(func=mdp.joint_vel_l2, weight=-0.001)
-    joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-5.0e-7)
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.15)  # B2: azioni piu' morbide (era -0.1)
+    joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7)
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.05)
     dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-5.0)
     energy = RewTerm(func=mdp.energy, weight=-2e-5)
 
-    # A2: penalizza la deviazione dalla posa di default SOLO a comando ~0 -> ferma la marcia residua.
-    # NB: mdp.stand_still e' una SOMMA non normalizzata su 27 giunti -> peso piccolo, altrimenti
-    # a inizio training (giunti lontani dal default) la penalita' domina -> policy "suicida".
-    stand_still = RewTerm(
-        func=mdp.stand_still,
-        weight=-0.05,
+    # FASE 2 (anti-barcollio, per FINETUNE da baseline): penalizza deviazione da default SOLO sugli
+    # env veri-fermi (is_standing_env), non su cmd<0.1 -> non combatte il tracking, niente deadlock.
+    stand_still_zero_cmd = RewTerm(
+        func=mdp.stand_still_zero_cmd,
+        weight=-0.5,
         params={"command_name": "base_velocity"},
     )
 
     joint_deviation_arms = RewTerm(
         func=mdp.joint_deviation_l1,
-        weight=-0.15,  # A3: tiene le braccia piu' ferme (era -0.1; -0.25 troppo aggressivo a inizio training)
+        weight=-0.1,
         params={
             "asset_cfg": SceneEntityCfg(
                 "robot",
@@ -325,7 +324,7 @@ class RewardsCfg:
     )
     feet_contact_forces = RewTerm(
         func=mdp.contact_forces,
-        weight=-0.0005,  # B2: ammorbidisce gli impatti al suolo (era -0.0002)
+        weight=-0.0002,
         params={
             "threshold": 500,
             "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*"),
@@ -424,9 +423,3 @@ class RobotPlayEnvCfg(RobotEnvCfg):
         self.scene.terrain.terrain_generator.num_rows = 2
         self.scene.terrain.terrain_generator.num_cols = 10
         self.commands.base_velocity.ranges = self.commands.base_velocity.limit_ranges
-        
-        # === TEST: comando ZERO su tutti gli env (verifica standing in IsaacSim) ===
-        # Se i robot stanno fermi qui ma cadono in MuJoCo -> gap sim2sim, non policy.
-        self.commands.base_velocity.ranges = mdp.UniformLevelVelocityCommandCfg.Ranges(
-            lin_vel_x=(0.0, 0.0), lin_vel_y=(0.0, 0.0), ang_vel_z=(0.0, 0.0)
-        )
