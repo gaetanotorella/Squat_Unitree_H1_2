@@ -102,26 +102,41 @@ sopra le penalità; non alzare troppo penalità che esplodono a inizio training 
 
 ---
 
-## 6. Deploy — `h1_2_ctrl_squat`
+## 6. Deploy — `h1_2_ctrl_squat` (IMPLEMENTATO)
 
 La pipeline obs del deploy è **data-driven** dal `deploy.yaml` esportato: il C++ chiama la
 `REGISTER_OBSERVATION(<nome-attributo-obs>)` corrispondente.
 
-**Già fatto (condiviso):** `REGISTER_OBSERVATION(base_height_command)` in
-`deploy/include/isaaclab/envs/mdp/observations/observations.h` — mappa un asse continuo (right-stick Y)
-nel range `[h_min, h_max]` letto da `cfg.commands.base_height.ranges.height` e restituisce `target − nominale`
-(identico al training). Innocua per il controllore velocity (che non elenca questa obs).
+**Controllore creato:** `deploy/robots/h1_2_squat/` (copia di `h1_2/`) con:
+- `config/config.yaml`: stato **`Squat`** (type `RLBase`), `policy_dir: ../../../logs/rsl_rl/unitree_h1_2_squat`,
+  transizioni **`RB + X`** (FixStand → Squat) e **`LT + B`** (Squat → Passive).
+- `CMakeLists.txt`: target eseguibile **`h1_2_ctrl_squat`** (project `h1_2_squat_controller`).
 
-**Da fare sulla macchina deploy (non testabile qui):**
-1. Copiare `deploy/robots/h1_2/` → `deploy/robots/h1_2_squat/`.
-2. In `config/config.yaml`: aggiungere uno stato `Squat` (type `RLBase`) con `policy_dir` → run squat, e
-   mantenere le transizioni joystick. Rinominare il target di build in `h1_2_ctrl_squat` (CMakeLists).
-3. **Mapping joystick** (scelta "continuo + preset"): right-stick Y = altezza (verificare **segno**);
-   collegare il **pulsante preset** (es. `A`) per riportare a `nominal` mentre premuto — c'è un `TODO`
-   nel C++ dove agganciare l'API del pulsante.
-4. Ricompilare e testare in sim2sim **prima** del reale.
+**Comando altezza (RT + B).** RT/R2 sul pad Unitree è **digitale** (bit R2, non analogico), quindi:
+- **Tieni `RT` (R2)** → il robot **scende** progressivamente (rampa `descend_rate` 0.30 m/s; più tieni, più scende).
+- **Tieni `B`** → **si rialza** progressivamente (rampa `rise_rate` 0.15 m/s, più lenta della discesa: evita
+  l'overshoot/ringing del nominale che dava barcollio alla risalita).
+- Stato dell'altezza in `env->squat_target` (aggiunto a `manager_based_rl_env.h`), letto/scritto in
+  `REGISTER_OBSERVATION(base_height_command)` (`observations.h`); output = `target − nominale`, identico al
+  training (`mdp.base_height_command_rel`). Innocua per il controllore velocity (che non elenca l'obs).
+- Gli stick continuano a **camminare/girare**; lo squat si applica a velocità ~0 (`only_when_standing`).
+- Tarabili: `descend_rate` (0.30 m/s), `rise_rate` (0.15 m/s). Verificare che `RT.pressed`/`B.pressed`
+  diano il verso atteso.
 
-> Il controllore squat si costruisce quando abbiamo una policy da testare: il lato training è il primo passo.
+**Fix export (necessario):** `export_deploy_cfg.py` serializzava solo `base_velocity`; ora serializza anche
+`commands.base_height` (con `limit_ranges` = 0.55–0.98). Inoltre `play.py` **rigenera** il `deploy.yaml`
+dopo l'export. ⇒ **ri-lanciare `play` su `model_3500`** per ottenere un `deploy.yaml` con
+`commands.base_height` (senza, il C++ che legge `cfg["commands"]["base_height"]["ranges"]["height"]` fallisce).
+
+**Build + avvio (PC deploy):**
+```bash
+cd deploy/robots/h1_2_squat && mkdir -p build && cd build && cmake .. && make
+./h1_2_ctrl_squat --network lo        # 'lo' = loopback per sim2sim; interfaccia reale per sim2real
+```
+Uso: `[L2 + Up]` → FixStand, poi `[R1 + X]` → Squat; quindi **tieni R2** per accovacciarti, **B** per rialzarti.
+
+> ⚠️ Il C++ non è stato compilato in fase di design: se `make` dà errori (candidati: accessi
+> `joystick->RT.pressed` / `joystick->B.pressed`), vanno risolti sul PC deploy.
 
 ---
 

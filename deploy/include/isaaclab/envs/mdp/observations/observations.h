@@ -161,12 +161,14 @@ REGISTER_OBSERVATION(base_height_command)
     const float h_max = range[1].as<float>();  // nominal / standing (e.g. 0.98)
 
     auto & joystick = env->robot->data.joystick;
-    const float descend_rate = 0.30f;  // [m/s] descent speed while RT is held
+    const float descend_rate = 0.15f;  // [m/s] descent speed while RT is held
+    const float rise_rate = 0.15f;     // [m/s] stand-up speed while B is held (slower -> no overshoot)
 
     // RT (R2) is digital on this pad -> "hold to squat": the longer RT is held, the deeper.
-    // B -> return to standing (snap to nominal). Held state lives in env->squat_target.
+    // B -> stand up, RAMPED (not a snap) so the base does not overshoot the nominal height and
+    // ring afterwards. Held state lives in env->squat_target.
     if (joystick->B.pressed)
-        env->squat_target = nominal;
+        env->squat_target += rise_rate * env->step_dt;
     else if (joystick->RT.pressed)
         env->squat_target -= descend_rate * env->step_dt;
     env->squat_target = std::clamp(env->squat_target, h_min, h_max);
