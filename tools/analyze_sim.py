@@ -183,8 +183,33 @@ def main():
     ax[1].set_ylabel("orientazione [deg]"); ax[1].set_xlabel("t [s]"); ax[1].grid(alpha=0.3); ax[1].legend()
     fig.tight_layout(); fig.savefig(os.path.join(outdir, "05_base_pose.png"), dpi=110); plt.close(fig)
 
+    # ---- SQUAT: altezza comandata vs altezza vera + comando altezza
+    # base_height_command (obs) = target - nominale (0 = in piedi, <0 = squat). L'altezza VERA
+    # e' in ground_truth.base_z ma su un altro clock -> la allineo a obs via wall_t condiviso.
+    if "base_height_command_0" in obs.columns:
+        NOMINAL_H = 0.98
+        bh_cmd = obs["base_height_command_0"].to_numpy()
+        target_h = NOMINAL_H + bh_cmd
+        base_z_on_obs = np.interp(obs["wall_t"].to_numpy(), gt["wall_t"].to_numpy(), gt["base_z"].to_numpy())
+        herr = base_z_on_obs - target_h
+        fig, axs = plt.subplots(2, 1, figsize=(11, 7), sharex=True)
+        axs[0].plot(t_obs, target_h, label="altezza comandata (target)", lw=1.6, color="tab:orange")
+        axs[0].plot(t_obs, base_z_on_obs, label="altezza vera base_z (gt)", lw=1.2, color="tab:blue")
+        axs[0].axhline(NOMINAL_H, ls="--", lw=0.8, color="gray", label="nominale 0.98")
+        axs[0].set_ylabel("altezza [m]"); axs[0].grid(alpha=0.3); axs[0].legend(fontsize=9)
+        axs[0].set_title("Squat: altezza comandata vs vera")
+        axs[1].plot(t_obs, herr * 100, lw=1.0, color="tab:red")
+        axs[1].axhline(0, ls="--", lw=0.8, color="gray")
+        axs[1].set_ylabel("errore altezza [cm]"); axs[1].set_xlabel("t [s]"); axs[1].grid(alpha=0.3)
+        squatting = bh_cmd < -0.03
+        if squatting.any():
+            axs[1].set_title(f"|err| in squat: medio={np.abs(herr[squatting]).mean()*100:.2f}cm  max={np.abs(herr[squatting]).max()*100:.2f}cm")
+        fig.tight_layout(); fig.savefig(os.path.join(outdir, "09_squat_height.png"), dpi=110); plt.close(fig)
+
     # ---- tutte le altre osservazioni
-    fig, ax = plt.subplots(3, 2, figsize=(13, 9))
+    has_squat = "base_height_command_0" in obs.columns
+    nrows = 4 if has_squat else 3
+    fig, ax = plt.subplots(nrows, 2, figsize=(13, 3 * nrows))
     ax = ax.ravel()
     bav = vecc(obs, ["base_ang_vel_0", "base_ang_vel_1", "base_ang_vel_2"], ["obs_0", "obs_1", "obs_2"])
     pg = vecc(obs, ["projected_gravity_0", "projected_gravity_1", "projected_gravity_2"], ["obs_3", "obs_4", "obs_5"])
@@ -204,6 +229,14 @@ def main():
     ax[3].plot(t_obs, gp); ax[3].set_title("gait_phase (sin, cos)")
     ax[4].plot(t_obs, jv, lw=0.6); ax[4].set_title("joint_vel_rel (27, scalata 0.05)")
     ax[5].plot(t_obs, la, lw=0.6); ax[5].set_title("last_action (27)")
+    if has_squat:
+        bhc = obs["base_height_command_0"].to_numpy()
+        ax[6].plot(t_obs, bhc, color="tab:orange"); ax[6].axhline(0, ls="--", lw=0.8, color="gray")
+        ax[6].set_title("base_height_command (target - nominale) [m]")
+        # riquadro 8: comando altezza assoluto per leggibilita'
+        ax[7].plot(t_obs, 0.98 + bhc, color="tab:orange")
+        ax[7].axhline(0.98, ls="--", lw=0.8, color="gray")
+        ax[7].set_title("altezza comandata assoluta [m]")
     for a in ax:
         a.grid(alpha=0.3); a.tick_params(labelsize=7); a.set_xlabel("t [s]", fontsize=8)
     fig.suptitle("Altre osservazioni", fontsize=12)
@@ -217,6 +250,30 @@ def main():
     print("== Tracking di giunto (q_target - q_misurato)")
     print(f"  GAMBE : |err| medio={np.abs(qerr[:, leg_idx]).mean():.4f}  max={np.abs(qerr[:, leg_idx]).max():.4f} rad")
     print(f"  BRACCIA: |err| medio={np.abs(qerr[:, arm_idx]).mean():.4f}  max={np.abs(qerr[:, arm_idx]).max():.4f} rad")
+
+    # ---- SQUAT + command tracking (obs allineate a gt via wall_t)
+    if "base_height_command_0" in obs.columns:
+        bh_cmd = obs["base_height_command_0"].to_numpy()
+        vcmd = vecc(obs, ["velocity_commands_0", "velocity_commands_1", "velocity_commands_2"],
+                    ["obs_6", "obs_7", "obs_8"])
+        walking = np.linalg.norm(vcmd, axis=1) > 0.1
+        squatting = bh_cmd < -0.03
+        standing = (~walking) & (~squatting)
+        target_h = 0.98 + bh_cmd
+        base_z_on_obs = np.interp(obs["wall_t"].to_numpy(), gt["wall_t"].to_numpy(), gt["base_z"].to_numpy())
+        herr = base_z_on_obs - target_h
+        print("== Squat / altezza (obs vs gt allineati su wall_t)")
+        print(f"  min altezza comandata = {target_h.min():.3f} m  |  fasi: cammino {100*walking.mean():.0f}% / squat {100*squatting.mean():.0f}% / fermo-eretto {100*standing.mean():.0f}%")
+        for lbl, m in [("eretto", standing), ("squat", squatting)]:
+            if m.any():
+                print(f"  {lbl}: |err altezza| medio={np.abs(herr[m]).mean()*100:.2f}cm  max={np.abs(herr[m]).max()*100:.2f}cm")
+        # sway per fase (base_ang_vel wx,wy)
+        bav = vecc(obs, ["base_ang_vel_0", "base_ang_vel_1", "base_ang_vel_2"], ["obs_0", "obs_1", "obs_2"])
+        print("== Sway base_ang_vel [rad/s] per fase")
+        for lbl, m in [("cammino", walking), ("eretto", standing), ("squat", squatting)]:
+            if m.sum() > 20:
+                print(f"  {lbl}: wx std={bav[m,0].std():.3f}  wy std={bav[m,1].std():.3f}  |wxy| max={np.hypot(bav[m,0],bav[m,1]).max():.3f}")
+
     print(f"\n== {len([f for f in os.listdir(outdir) if f.endswith('.png')])} plot salvati in {outdir}")
 
 
