@@ -54,6 +54,30 @@ def stand_still_zero_cmd(
     return reward * is_standing
 
 
+def joint_action_rate_standing(
+    env: ManagerBasedRLEnv,
+    command_name: str = "base_velocity",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Action-rate (first difference) on a joint SUBSET, ONLY on the true standing envs.
+
+    Targets the standing ankle limit-cycle: it lives in the ACTION (the policy commands an
+    oscillating target) but NOT in the measured joint position (the joint is too soft, kp low, to
+    follow it), so position-based penalties (stand_still) miss it entirely. Restricting to a few
+    joints and gating on ``is_standing_env`` means:
+      - it does NOT penalize the leg swing needed while walking;
+      - the slow, ramped squat descent has tiny action-rate, so it does not fight the squat, while the
+        fast (~0.8 Hz) limit-cycle has large per-step action change and IS penalized.
+
+    NOTE: assumes the action space is JointPositionAction over ``joint_names=[".*"]`` so that the
+    action index equals the articulation joint index (thus ``asset_cfg.joint_ids`` indexes the action).
+    """
+    idx = asset_cfg.joint_ids
+    da = env.action_manager.action[:, idx] - env.action_manager.prev_action[:, idx]
+    is_standing = env.command_manager.get_term(command_name).is_standing_env
+    return torch.sum(torch.square(da), dim=1) * is_standing
+
+
 """
 Squat (base height) rewards.
 """

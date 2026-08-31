@@ -81,7 +81,9 @@ class SquatRewardsCfg(RewardsCfg):
     track_base_height = RewTerm(
         func=mdp.track_base_height_exp,
         weight=3.0,
-        params={"command_name": "base_height", "std": 0.1},
+        # std 0.07 (era 0.1): piu' gradiente sotto i 5 cm -> raggiunge la profondita' comandata
+        # (prima ~4 cm di undershoot alla massima discesa).
+        params={"command_name": "base_height", "std": 0.07},
     )
     # penalize vertical bouncing ONLY once near the target height (does not fight the transition)
     settle_height = RewTerm(
@@ -92,7 +94,9 @@ class SquatRewardsCfg(RewardsCfg):
     # -- squat stability
     squat_symmetry = RewTerm(  # L/R symmetry on the squat DOF (anti-asymmetric-squat)
         func=mdp.joint_mirror,
-        weight=-0.5,
+        # -1.0 (era -0.5): riduce l'asimmetria L/R ~5 deg (hip_pitch/ankle_pitch) che rendeva il passo
+        # irregolare e causava la deriva lenta di yaw. Applicata sempre (non gated).
+        weight=-1.0,
         params={
             "asset_cfg": SceneEntityCfg("robot"),
             "mirror_joints": [
@@ -115,12 +119,28 @@ class SquatRewardsCfg(RewardsCfg):
         weight=-2.0,
         params={"threshold": 0.2, "asset_cfg": SceneEntityCfg("robot", body_names=".*ankle_roll.*")},
     )
+    # -- anti-barcollio: smorza il ciclo-limite di caviglia da fermo (vive nell'AZIONE, non nella
+    # posizione misurata -> stand_still non lo vede). Gated su is_standing_env: non tocca il passo; la
+    # discesa squat (lenta) ha action-rate piccola -> non la ostacola. Peso DA TUNARE dal basso.
+    ankle_action_smoothness = RewTerm(
+        func=mdp.joint_action_rate_standing,
+        weight=-0.02,
+        params={
+            "command_name": "base_velocity",
+            "asset_cfg": SceneEntityCfg("robot", joint_names=[".*_ankle_pitch_joint", ".*_ankle_roll_joint"]),
+        },
+    )
 
     def __post_init__(self):
         # fixed-target height penalty -> replaced by track_base_height (variable target)
         self.base_height = None
         # ungated vertical-velocity penalty would fight the squat transition -> replaced by settle_height
         self.base_linear_velocity = None
+        # stand_still penalizza |q - q_default| sugli is_standing_env, che con only_when_standing sono
+        # ESATTAMENTE gli env che squattano -> frena lo squat, e NON tocca il ciclo-limite (che e'
+        # nell'azione). Ridotto -0.5 -> -0.1: standing-tall e' gia' buono; l'anti-barcollio ora e'
+        # ankle_action_smoothness. Mettere a None se lo squat resta poco profondo.
+        self.stand_still_zero_cmd.weight = -0.1
 
 
 @configclass

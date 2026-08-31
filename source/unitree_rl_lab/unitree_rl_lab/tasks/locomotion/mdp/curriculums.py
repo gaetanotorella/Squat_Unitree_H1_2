@@ -34,6 +34,25 @@ def lin_vel_cmd_levels(
                 limit_ranges.lin_vel_y[1],
             ).tolist()
 
+        # Yaw (turning) expansion, gated INDEPENDENTLY on its own tracking reward. Without this the
+        # ang_vel_z command stays frozen at its initial (tiny) range for the whole training while the
+        # deploy joystick maps the full limit range -> turning is out-of-distribution and ignored.
+        try:
+            ang_reward = (
+                torch.mean(env.reward_manager._episode_sums["track_ang_vel_z"][env_ids])
+                / env.max_episode_length_s
+            )
+            ang_weight = env.reward_manager.get_term_cfg("track_ang_vel_z").weight
+            if ang_reward > ang_weight * 0.8:
+                delta_command = torch.tensor([-0.1, 0.1], device=env.device)
+                ranges.ang_vel_z = torch.clamp(
+                    torch.tensor(ranges.ang_vel_z, device=env.device) + delta_command,
+                    limit_ranges.ang_vel_z[0],
+                    limit_ranges.ang_vel_z[1],
+                ).tolist()
+        except KeyError:
+            pass  # task without a track_ang_vel_z reward: skip yaw expansion
+
     return torch.tensor(ranges.lin_vel_x[1], device=env.device)
 
 
