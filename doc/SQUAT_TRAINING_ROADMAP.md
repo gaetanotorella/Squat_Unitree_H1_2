@@ -173,6 +173,45 @@ La rampa di risalita è già nel deploy (`rise_rate` 0.15) — invariata.
 
 ---
 
+## 4-bis. ROUND 2 — modifiche dopo la validazione sim2sim `sim_2026-09-03_20-49-35`
+
+Il round 1 ha funzionato: yaw corr **−0.17 → +0.86**, sway da fermo **0.030 → 0.016**, errore altezza
+squat **3.55 → 1.70 cm**, asimmetria posa **~dimezzata**, zero cadute. Restavano 5 punti, tutti applicati
+il **2026-09-03**:
+
+| # | Problema misurato | Modifica | File |
+|---|---|---|---|
+| 1 | Squat satura a **0.581 m**: `ankle_pitch` a fondo corsa (HW [−0.897,+0.524], soft −0.826); target comandato −1.00 = oltre il limite | `DEEPEST_SQUAT` 0.55 → **0.60** | `squat_env_cfg.py` |
+| 2a | Yaw gira ma a **guadagno 0.40**; il range smetteva di espandersi (gate 0.8 vs tracking che plafona a ~0.5) | gate espansione `ang_vel_z` **0.8 → 0.55**·peso | `curriculums.py` |
+| 2b | Girare sul posto = manovra peggiore (roll −9.1°, **vy spuria 0.45 m/s**) | nuova `lateral_drift_on_turn` (peso **−0.5**), attiva solo con comando lineare ~0 e yaw > 0.2 | `rewards.py`, `squat_env_cfg.py` |
+| 3 | Asimmetria di risposta: vy a sinistra **0.13** vs destra 0.73; wz sinistra 0.33 vs destra 0.45 | nuova `joint_mirror_antisym` su hip_roll/ankle_roll (peso **−0.3**) | `rewards.py`, `squat_env_cfg.py` |
+| 4 | Ciclo-limite caviglia ridotto ma presente (tgt 0.172 / mis 0.044) | `ankle_action_smoothness` −0.02 → **−0.04** | `squat_env_cfg.py` |
+| 5 | **12% del run** era squat-mentre-cammina = fuori distribuzione | `only_when_standing` True → **False** (Fase B) | `squat_env_cfg.py` |
+
+**Perché `joint_mirror_antisym` e non `joint_mirror`:** i giunti *roll* sono **antisimmetrici** (L ≈ −R:
+misurato hip_roll L −0.012 / R +0.010), quindi la simmetria corretta è `(L+R)²`, non `(L−R)²`. Inoltre
+`joint_mirror` tiene la cache in **un unico attributo sull'env**: un secondo termine che riusasse quella
+funzione erediterebbe silenziosamente i giunti del primo → serve una funzione con cache propria.
+**Non** includere `hip_yaw`: la rotazione richiede legittimamente asimmetria di yaw.
+
+**Rischio principale del round 2:** la #5 (squat in cammino) alza parecchio la difficoltà. Il freno di
+sicurezza è il curriculum di altezza, che approfondisce solo se `track_lin_vel_xy` **e**
+`track_base_height` sono entrambi buoni: se il regime è troppo duro, la profondità semplicemente non
+cresce (nessun collasso). Sorvegliare `base_contact` e `height_cmd_levels` nelle prime ~500 iter.
+
+**Non fatto di proposito:** stringere lo `std` di `track_ang_vel_z` (attualmente √0.25). Interagisce con
+la soglia del curriculum appena abbassata (std più stretto ⇒ reward più bassa ⇒ gate più difficile):
+meglio cambiare una variabile per volta. È il primo knob se il guadagno yaw resta < 0.7.
+
+**Criteri di successo del round 2 (in sim2sim):**
+- guadagno yaw **> 0.7** (era 0.40) e nessun picco di roll > 5° girando sul posto;
+- rapporto vy sinistra/destra **> 0.6** (era 0.13/0.73);
+- errore altezza squat **< 1 cm su tutto il range 0.60–0.98** (niente saturazione);
+- sway `wy` da fermo **< 0.012** (era 0.016);
+- squat in cammino: `wy` comparabile al cammino eretto (era 0.029 vs 0.020).
+
+---
+
 ## 5. Checklist edit (file → modifica)
 
 - [x] `mdp/rewards.py` — aggiunta `joint_action_rate_standing` (P1a)

@@ -305,3 +305,53 @@ def joint_mirror(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, mirror_joint
         )
     reward *= 1 / len(mirror_joints) if len(mirror_joints) > 0 else 0
     return reward
+
+
+def joint_mirror_antisym(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, mirror_joints: list[list[str]]) -> torch.Tensor:
+    """L/R symmetry for joints whose mirrored configuration is ANTI-symmetric (left = -right).
+
+    Use for ROLL joints (hip_roll, ankle_roll), where a symmetric stance means left and right hold
+    OPPOSITE values (verified in the logs: standing L hip_roll -0.012 vs R +0.010). ``joint_mirror``
+    penalizes ``(L-R)^2`` and is for joints that mirror with the SAME sign (hip_pitch, knee,
+    ankle_pitch); using it on roll joints would penalize the correct posture.
+
+    Do NOT apply to hip_yaw: turning legitimately needs L/R yaw asymmetry.
+
+    NOTE: keeps its OWN cache attribute -- ``joint_mirror`` stores its cache on the env under a
+    single name, so a second term reusing that function would silently share the first term's joints.
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    if not hasattr(env, "joint_antimirror_joints_cache") or env.joint_antimirror_joints_cache is None:
+        env.joint_antimirror_joints_cache = [
+            [asset.find_joints(joint_name) for joint_name in joint_pair] for joint_pair in mirror_joints
+        ]
+    reward = torch.zeros(env.num_envs, device=env.device)
+    for joint_pair in env.joint_antimirror_joints_cache:
+        reward += torch.sum(
+            torch.square(asset.data.joint_pos[:, joint_pair[0][0]] + asset.data.joint_pos[:, joint_pair[1][0]]),
+            dim=-1,
+        )
+    reward *= 1 / len(mirror_joints) if len(mirror_joints) > 0 else 0
+    return reward
+
+
+def lateral_drift_on_turn(
+    env: ManagerBasedRLEnv,
+    command_name: str = "base_velocity",
+    lin_cmd_thresh: float = 0.1,
+    ang_cmd_thresh: float = 0.2,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Penalize spurious LATERAL body velocity while the command is a pure turn (yaw only).
+
+    Turning in place was the most destabilizing manoeuvre in sim2sim: with ``wz=-0.5`` and zero
+    linear command the robot lurched sideways at up to 0.45 m/s and rolled to -9.1 deg, instead of
+    rotating on the spot. Gated so it is active ONLY when the linear command is ~0 and the yaw
+    command is significant -> it never fights a commanded lateral motion.
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    command = env.command_manager.get_command(command_name)
+    lin_cmd_norm = torch.norm(command[:, :2], dim=1)
+    pure_turn = (lin_cmd_norm < lin_cmd_thresh) & (torch.abs(command[:, 2]) > ang_cmd_thresh)
+    lateral_vel = asset.data.root_lin_vel_b[:, 1]
+    return torch.square(lateral_vel) * pure_turn

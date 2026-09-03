@@ -28,7 +28,11 @@ from .velocity_env_cfg import (
 )
 
 NOMINAL_HEIGHT = 0.98
-DEEPEST_SQUAT = 0.55
+# 0.60 (era 0.55): misurato in sim2sim che con i piedi piatti il robot NON puo' scendere sotto
+# ~0.59 m -- l'ankle_pitch va a fondo corsa (limite HW [-0.897, +0.524] rad, soft limit di training
+# 0.9x -> -0.826). Sotto 0.62 il tracking saturava (+3 cm di errore) e la policy comandava target
+# oltre il limite fisico (-1.00 rad), sprecando autorita' di controllo contro il fine corsa.
+DEEPEST_SQUAT = 0.60
 
 
 @configclass
@@ -39,7 +43,11 @@ class SquatCommandsCfg(CommandsCfg):
         asset_name="robot",
         resampling_time_range=(5.0, 8.0),
         nominal_height=NOMINAL_HEIGHT,
-        only_when_standing=True,  # squat only at ~zero velocity (Phase A)
+        # FASE B: False -> lo squat viene campionato anche sugli env in cammino. In deploy l'operatore
+        # puo' tenere RT mentre cammina (nel run 2026-09-03 e' successo nel 12% dei campioni) e con
+        # True quel regime era FUORI DISTRIBUZIONE. Il curriculum di altezza resta il freno di
+        # sicurezza: approfondisce solo se track_lin_vel E track_base_height sono entrambi buoni.
+        only_when_standing=False,
         velocity_command_name="base_velocity",
         debug_vis=False,
         # start with NO squat (pure standing/walking); curriculum lowers the minimum.
@@ -124,11 +132,34 @@ class SquatRewardsCfg(RewardsCfg):
     # discesa squat (lenta) ha action-rate piccola -> non la ostacola. Peso DA TUNARE dal basso.
     ankle_action_smoothness = RewTerm(
         func=mdp.joint_action_rate_standing,
-        weight=-0.02,
+        # -0.04 (era -0.02): a -0.02 il ciclo-limite si e' dimezzato (sway wy 0.030 -> 0.016) senza
+        # alcun costo di stabilita' -> c'e' margine per stringere ancora.
+        weight=-0.04,
         params={
             "command_name": "base_velocity",
             "asset_cfg": SceneEntityCfg("robot", joint_names=[".*_ankle_pitch_joint", ".*_ankle_roll_joint"]),
         },
+    )
+    # -- simmetria L/R sui giunti ROLL (antisimmetrici: L = -R). Attacca l'asimmetria di risposta
+    # laterale/rotazionale misurata in sim (vy verso sinistra al 13% del comandato vs 73% a destra).
+    # Peso piu' basso di squat_symmetry: i roll servono anche all'equilibrio, non vanno congelati.
+    roll_symmetry = RewTerm(
+        func=mdp.joint_mirror_antisym,
+        weight=-0.3,
+        params={
+            "asset_cfg": SceneEntityCfg("robot"),
+            "mirror_joints": [
+                ["left_hip_roll_joint", "right_hip_roll_joint"],
+                ["left_ankle_roll_joint", "right_ankle_roll_joint"],
+            ],
+        },
+    )
+    # -- anti-sbandamento in rotazione: girare sul posto era la manovra piu' destabilizzante
+    # (roll -9.1 deg e vy spuria fino a 0.45 m/s con wz=-0.5 e comando lineare nullo).
+    turn_lateral_drift = RewTerm(
+        func=mdp.lateral_drift_on_turn,
+        weight=-0.5,
+        params={"command_name": "base_velocity", "lin_cmd_thresh": 0.1, "ang_cmd_thresh": 0.2},
     )
 
     def __post_init__(self):
@@ -136,10 +167,10 @@ class SquatRewardsCfg(RewardsCfg):
         self.base_height = None
         # ungated vertical-velocity penalty would fight the squat transition -> replaced by settle_height
         self.base_linear_velocity = None
-        # stand_still penalizza |q - q_default| sugli is_standing_env, che con only_when_standing sono
-        # ESATTAMENTE gli env che squattano -> frena lo squat, e NON tocca il ciclo-limite (che e'
-        # nell'azione). Ridotto -0.5 -> -0.1: standing-tall e' gia' buono; l'anti-barcollio ora e'
-        # ankle_action_smoothness. Mettere a None se lo squat resta poco profondo.
+        # stand_still penalizza |q - q_default| sugli is_standing_env, ma quegli env ricevono anche un
+        # target di squat (posa che DEVE scostarsi dalla default) -> frena lo squat, e NON tocca il
+        # ciclo-limite (che vive nell'azione). Tenuto basso a -0.1: standing-tall e' gia' buono
+        # (sway 0.016, err altezza 0.29 cm); l'anti-barcollio e' ankle_action_smoothness.
         self.stand_still_zero_cmd.weight = -0.1
 
 
