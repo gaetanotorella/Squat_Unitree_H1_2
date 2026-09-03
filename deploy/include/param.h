@@ -44,6 +44,12 @@ inline std::filesystem::path proj_dir;
 inline std::filesystem::path config_dir;
 inline YAML::Node config;
 
+// Interfaccia DDS scelta con --network. "lo" (o vuota) = sim2sim in loopback su questo PC;
+// qualunque altra interfaccia (eth0, enp3s0, ...) = test sul ROBOT REALE.
+// Serve al logger per decidere se creare una cartella exp_<ts> (robot reale, nessun simulatore
+// e nessun ground truth) oppure agganciare la sim_<ts> creata dal simulatore.
+inline std::string network_iface;
+
 inline std::filesystem::path get_bin_path() {
     std::vector<char> path(1024);
     ssize_t len = readlink("/proc/self/exe", &path[0], path.size());
@@ -135,6 +141,8 @@ inline po::variables_map helper(int argc, char** argv)
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
     po::notify(vm);
+
+    network_iface = vm["network"].as<std::string>();
 
     if (vm.count("help"))
     {

@@ -17,6 +17,8 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cmath>
+#include <ctime>
+#include "param.h"
 #include "isaaclab/utils/utils.h"
 
 namespace isaaclab
@@ -75,9 +77,11 @@ public:
     }
 
     // === LOG STRUTTURATO: obs.csv / commands.csv / errors.csv ===
-    // Scrive nella cartella unitree_ws/sim_logs/sim_<ts>/ creata dal simulatore (piu' recente);
-    // fallback a sim_controller_only/ se il simulatore non ne ha create.
-    // Allineamento col ground_truth via wall_t (orologio di sistema).
+    // Destinazione (sotto unitree_ws/sim_logs/), decisa da --network:
+    //   - ROBOT REALE (interfaccia != "lo") -> crea exp_<ts>/  (nessun ground_truth: non esiste)
+    //   - sim2sim ("lo")                    -> usa la sim_<ts>/ del simulatore, se fresca (<120 s)
+    //   - sim2sim senza simulatore attivo   -> sim_controller_only_<ts>/
+    // Allineamento col ground_truth (solo in sim2sim) via wall_t (orologio di sistema).
     void log_step(std::unordered_map<std::string, std::vector<float>> & obs)
     {
         static std::ofstream obs_out, cmd_out, err_out;
@@ -140,16 +144,55 @@ public:
             std::filesystem::path base = std::string(home ? home : ".") + "/unitree_ws/sim_logs";
             std::filesystem::path run_dir;
             std::error_code ec;
-            std::string best;
-            if (std::filesystem::exists(base, ec)) {
+            std::filesystem::create_directories(base, ec);
+
+            auto stamp = []() {
+                std::time_t t = std::time(nullptr);
+                char buf[32];
+                std::strftime(buf, sizeof(buf), "%Y-%m-%d_%H-%M-%S", std::localtime(&t));
+                return std::string(buf);
+            };
+
+            // "lo" (o vuota) = sim2sim; qualunque altra interfaccia = ROBOT REALE.
+            const std::string & iface = param::network_iface;
+            const bool real_robot = !(iface.empty() || iface == "lo");
+
+            if (real_robot) {
+                // Sul robot reale non c'e' nessun simulatore che crei la cartella, e non esiste un
+                // ground_truth: il controllore crea la PROPRIA cartella exp_<ts>.
+                run_dir = base / ("exp_" + stamp());
+                std::filesystem::create_directories(run_dir, ec);
+            } else {
+                // sim2sim: aggancia la cartella del simulatore, identificata da ground_truth.csv
+                // (che SOLO il simulatore scrive) e "fresca" -- cioe' con ground_truth.csv scritto
+                // da meno di 120 s, segno che il simulatore sta girando ADESSO.
+                // Senza questo controllo, lanciare il controllore senza far ripartire il simulatore
+                // riscriveva i CSV di un run VECCHIO (e' cosi' che sim_2026-08-31 ha perso una colonna).
+                // NB: si guarda la mtime del FILE, non della directory: appendere a un file non
+                // aggiorna la mtime della cartella che lo contiene.
+                std::string best;
+                std::filesystem::file_time_type best_t{};
                 for (auto & e : std::filesystem::directory_iterator(base, ec)) {
                     if (!e.is_directory()) continue;
+                    std::filesystem::path g = e.path() / "ground_truth.csv";
+                    if (!std::filesystem::exists(g, ec)) continue;
                     std::string name = e.path().filename().string();
-                    if (name.rfind("sim_", 0) == 0 && name > best) best = name;
+                    if (name > best) { best = name; best_t = std::filesystem::last_write_time(g, ec); }
+                }
+                bool fresh = false;
+                if (!best.empty()) {
+                    auto age = std::filesystem::file_time_type::clock::now() - best_t;
+                    fresh = std::chrono::duration_cast<std::chrono::seconds>(age).count() < 120;
+                }
+                if (fresh) {
+                    run_dir = base / best;
+                } else {
+                    // nessun simulatore attivo: cartella dedicata e TIMESTAMPATA (non sovrascrive
+                    // nulla, e senza ground_truth.csv non verra' mai riagganciata da un run futuro)
+                    run_dir = base / ("ctrl_only_" + stamp());
+                    std::filesystem::create_directories(run_dir, ec);
                 }
             }
-            if (!best.empty()) run_dir = base / best;
-            else { run_dir = base / "sim_controller_only"; std::filesystem::create_directories(run_dir, ec); }
 
             obs_out.open((run_dir / "obs.csv").string());
             cmd_out.open((run_dir / "commands.csv").string());

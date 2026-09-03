@@ -128,6 +128,36 @@ La pipeline obs del deploy è **data-driven** dal `deploy.yaml` esportato: il C+
 dopo l'export. ⇒ **ri-lanciare `play` su `model_3500`** per ottenere un `deploy.yaml` con
 `commands.base_height` (senza, il C++ che legge `cfg["commands"]["base_height"]["ranges"]["height"]` fallisce).
 
+**Cartelle di log (sim vs robot reale).** Il controllore decide da `--network`:
+
+| Contesto | `--network` | Cartella creata sotto `unitree_ws/sim_logs/` | `ground_truth.csv` |
+|---|---|---|---|
+| sim2sim MuJoCo | `lo` | `sim_<ts>/` (creata dal simulatore, agganciata dal controllore) | sì |
+| **test robot reale** | `eth0`, `enp3s0`, … | **`exp_<ts>/`** (creata dal controllore) | **no** |
+| controllore senza simulatore | `lo` | `ctrl_only_<ts>/` | no |
+
+Il simulatore viene riconosciuto dalla presenza di `ground_truth.csv` **scritto da meno di 120 s**
+(si guarda la mtime del file, non della cartella: appendere non aggiorna la mtime della directory).
+Prima il controllore agganciava semplicemente la `sim_*` più recente e **sovrascriveva i CSV di un run
+vecchio** se lanciato senza far ripartire il simulatore.
+
+`tools/analyze_sim.py` riconosce entrambi i prefissi e, sui run `exp_*`, **omette automaticamente**
+tutto ciò che deriva dal ground truth (posizione XYZ, yaw). Al suo posto usa solo grandezze
+ricostruibili a bordo:
+
+| Grandezza | Come si ottiene sul robot reale | Accuratezza (vs ground truth in sim) |
+|---|---|---|
+| roll / pitch | da `projected_gravity` (IMU) | RMS **0.06° / 0.03°** |
+| **altezza della base** | **cinematica diretta**: modello MuJoCo nella posa misurata (encoder) + orientazione IMU, si prende il punto più basso dei due piedi e si assume appoggiato a terra | bias **+0.33 cm**, std **0.23 cm**, corr **0.9995** (fermo: std 0.07–0.12 cm) |
+| yaw, posizione XYZ | **non ricostruibili** (servirebbe motion capture / state estimator) | — |
+
+La stima di altezza è la stessa informazione da cui l'actor inferisce la propria altezza (FK dai
+`joint_pos`), quindi è coerente col design del task. **Ipotesi: suolo piatto e almeno un piede in
+appoggio** — degrada su terreno inclinato o irregolare. Richiede `mujoco` e il MJCF di H1_2
+(cercato in `$H1_2_MJCF`, poi in `~/unitree_ws/unitree_mujoco/...`); se mancano, il plot mostra
+solo l'altezza comandata. Nei run in simulazione la stessa stima è sovrapposta come **controprova**
+tratteggiata accanto al ground truth.
+
 **Build + avvio (PC deploy):**
 ```bash
 cd deploy/robots/h1_2_squat && mkdir -p build && cd build && cmake .. && make
