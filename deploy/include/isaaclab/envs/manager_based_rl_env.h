@@ -194,6 +194,45 @@ public:
                 }
             }
 
+            // --- run_info.md: da quale POLICY viene questo log ---
+            // Senza questo, dato un sim_log/exp_log non c'e' modo di risalire alla policy che lo
+            // ha prodotto (le cartelle in logs/ sono piu' d'una e il controllore, se policy_dir
+            // non e' esplicita, sceglie da solo la piu' recente con exported/).
+            {
+                std::ofstream info((run_dir / "run_info.md").string());
+                auto yaml_range = [&](const char * cmd, const char * key) {
+                    try {
+                        auto n = cfg["commands"][cmd]["ranges"][key];
+                        char b[64];
+                        std::snprintf(b, sizeof(b), "[%.3g, %.3g]", n[0].as<float>(), n[1].as<float>());
+                        return std::string(b);
+                    } catch (...) { return std::string("n/d"); }
+                };
+                std::time_t tt = std::time(nullptr);
+                char tbuf[64];
+                std::strftime(tbuf, sizeof(tbuf), "%Y-%m-%d %H:%M:%S", std::localtime(&tt));
+
+                info << "# Run info\n\n";
+                info << "- **policy_dir**: " << param::policy_dir.string() << "\n";
+                info << "- **policy_name**: " << param::policy_dir.filename().string() << "\n";
+                info << "- **controller**: " << param::bin_path.filename().string() << "\n";
+                info << "- **network**: " << (param::network_iface.empty() ? "(default)" : param::network_iface)
+                     << (real_robot ? "  -> ROBOT REALE" : "  -> sim2sim") << "\n";
+                info << "- **started**: " << tbuf << "\n";
+                info << "- **n_obs**: " << (obsvec ? obsvec->size() : 0) << "\n";
+                info << "- **n_joints**: " << nj << "\n";
+                info << "- **base_height_range**: " << yaml_range("base_height", "height") << "\n";
+                info << "- **lin_vel_x_range**: " << yaml_range("base_velocity", "lin_vel_x") << "\n";
+                info << "- **lin_vel_y_range**: " << yaml_range("base_velocity", "lin_vel_y") << "\n";
+                info << "- **ang_vel_z_range**: " << yaml_range("base_velocity", "ang_vel_z") << "\n";
+                std::error_code fec;
+                auto onnx = param::policy_dir / "exported" / "policy.onnx";
+                if (std::filesystem::exists(onnx, fec))
+                    info << "- **policy_onnx_bytes**: " << std::filesystem::file_size(onnx, fec) << "\n";
+                info.close();
+                std::cout << "[deploy_logger] policy = " << param::policy_dir.string() << std::endl;
+            }
+
             obs_out.open((run_dir / "obs.csv").string());
             cmd_out.open((run_dir / "commands.csv").string());
             err_out.open((run_dir / "errors.csv").string());

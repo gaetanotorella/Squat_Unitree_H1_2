@@ -43,11 +43,12 @@ class SquatCommandsCfg(CommandsCfg):
         asset_name="robot",
         resampling_time_range=(5.0, 8.0),
         nominal_height=NOMINAL_HEIGHT,
-        # FASE B: False -> lo squat viene campionato anche sugli env in cammino. In deploy l'operatore
-        # puo' tenere RT mentre cammina (nel run 2026-09-03 e' successo nel 12% dei campioni) e con
-        # True quel regime era FUORI DISTRIBUZIONE. Il curriculum di altezza resta il freno di
-        # sicurezza: approfondisce solo se track_lin_vel E track_base_height sono entrambi buoni.
-        only_when_standing=False,
+        # SOSPESA la Fase B (era False nel training 2026-09-04): lo squat-in-cammino e' costato
+        # locomozione in modo misurabile -- terrain_levels 4.78 -> 2.61, track_lin_vel 0.835 ->
+        # 0.733, guadagno vx (cammino eretto) 0.68 -> 0.58 -- e non e' la priorita': sul robot
+        # reale il problema e' stare in piedi con margine. Da riattivare in un round successivo,
+        # eventualmente solo su una FRAZIONE degli env in cammino invece che su tutti.
+        only_when_standing=True,
         velocity_command_name="base_velocity",
         debug_vis=False,
         # start with NO squat (pure standing/walking); curriculum lowers the minimum.
@@ -102,11 +103,16 @@ class SquatRewardsCfg(RewardsCfg):
     # -- squat stability
     squat_symmetry = RewTerm(  # L/R symmetry on the squat DOF (anti-asymmetric-squat)
         func=mdp.joint_mirror,
-        # -1.0 (era -0.5): riduce l'asimmetria L/R ~5 deg (hip_pitch/ankle_pitch) che rendeva il passo
-        # irregolare e causava la deriva lenta di yaw. Applicata sempre (non gated).
+        # -1.0 (era -0.5): riduce l'asimmetria L/R ~5 deg (hip_pitch/ankle_pitch).
+        # ORA GATED sugli env fermi: (L-R)^2 senza gate penalizza l'andatura, che e' in
+        # CONTRO-FASE per costruzione. Misurato -0.023/-0.031 nel run 2026-09-04, cioe' termine
+        # attivamente violato dal passo (~4% di zavorra su track_lin_vel_xy). Il gate conserva
+        # l'intento -- uno squat simmetrico -- ed elimina il conflitto col cammino.
+        # NB: roll_symmetry NON e' gated: vale -0.003, quindi e' gia' soddisfatto e non ostacola.
         weight=-1.0,
         params={
             "asset_cfg": SceneEntityCfg("robot"),
+            "command_name": "base_velocity",
             "mirror_joints": [
                 ["left_hip_pitch_joint", "right_hip_pitch_joint"],
                 ["left_knee_joint", "right_knee_joint"],
@@ -156,10 +162,25 @@ class SquatRewardsCfg(RewardsCfg):
     )
     # -- anti-sbandamento in rotazione: girare sul posto era la manovra piu' destabilizzante
     # (roll -9.1 deg e vy spuria fino a 0.45 m/s con wz=-0.5 e comando lineare nullo).
-    turn_lateral_drift = RewTerm(
-        func=mdp.lateral_drift_on_turn,
-        weight=-0.5,
-        params={"command_name": "base_velocity", "lin_cmd_thresh": 0.1, "ang_cmd_thresh": 0.2},
+    # NB: misurato INERTE nel training del 2026-09-04 (reward rimasta a -0.000): lo scenario
+    # "comando lineare ~0 + yaw significativo" e' ~2% dei campioni perche' il campionatore estrae
+    # vx, vy, wz in modo indipendente e gli env fermi azzerano TUTTI e tre i comandi. Va riattivato
+    # solo insieme al campionamento turn-in-place (rimandato al round 4).
+    # -- margine di stabilita': tiene il baricentro sopra le caviglie quando si sta in piedi.
+    # E' il termine che mancava e che sul robot reale ha fatto la differenza (CoM 4.5 cm dietro,
+    # a 4.1 cm dal bordo del tallone). Taratura: in sim la coppia da fermo e' ~14 N·m sui due
+    # ankle_pitch; con L1 e peso -7e-4 la penalita' nominale e' ~0.010, in linea con gli altri
+    # termini di regolarizzazione (action_rate ~0.05, ankle_action_smoothness ~0.01).
+    ankle_torque_margin = RewTerm(
+        func=mdp.ankle_torque_standing,
+        weight=-7e-4,
+        params={
+            "command_name": "base_velocity",
+            "height_command_name": "base_height",
+            "nominal_height": NOMINAL_HEIGHT,
+            "height_tol": 0.05,
+            "asset_cfg": SceneEntityCfg("robot", joint_names=[".*_ankle_pitch_joint"]),
+        },
     )
 
     def __post_init__(self):

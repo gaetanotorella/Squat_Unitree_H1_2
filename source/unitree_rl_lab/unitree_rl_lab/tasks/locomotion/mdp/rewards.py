@@ -78,6 +78,41 @@ def joint_action_rate_standing(
     return torch.sum(torch.square(da), dim=1) * is_standing
 
 
+def ankle_torque_standing(
+    env: ManagerBasedRLEnv,
+    command_name: str = "base_velocity",
+    height_command_name: str = "base_height",
+    nominal_height: float = 0.98,
+    height_tol: float = 0.05,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Penalize STEADY ankle torque while standing tall -> keeps the CoM over the ankles.
+
+    Rationale (measured on the real robot): at equilibrium the ankle torque IS the horizontal
+    offset of the centre of mass, ``tau = M*g*d``. A posture that needs little ankle torque is a
+    posture whose CoM sits over the ankle, i.e. with the MAXIMUM margin before tipping onto the
+    heels. Nothing in the reward set rewarded that margin, and the real robot stood with the CoM
+    4.5 cm behind the ankle -- 4.1 cm from the heel edge -- which the squat then consumed.
+
+    It also attacks the mechanism directly: the foot tilt was proportional to the ankle tracking
+    error (r = 0.980), and that error is exactly ``tau / kp``.
+
+    Gated on standing envs AND on a near-nominal height command, so it never fights the squat,
+    where a large ankle torque is legitimate and unavoidable.
+
+    NOTE: uses L1 (|tau|) and not L2 on purpose. The goal is to shape the STEADY-STATE posture,
+    not to punish transients: with the square, a 60 Nm recovery spike would cost ~0.7 (about 5x
+    the ``alive`` bonus) and would discourage the robot from catching itself. L1 keeps the same
+    nominal pressure while staying ~10x gentler on spikes.
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    torque = asset.data.applied_torque[:, asset_cfg.joint_ids]
+    is_standing = env.command_manager.get_term(command_name).is_standing_env
+    height_cmd = env.command_manager.get_command(height_command_name).squeeze(-1)
+    standing_tall = height_cmd > (nominal_height - height_tol)
+    return torch.sum(torch.abs(torque), dim=1) * is_standing * standing_tall
+
+
 """
 Squat (base height) rewards.
 """
@@ -287,7 +322,21 @@ Other rewards.
 """
 
 
-def joint_mirror(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, mirror_joints: list[list[str]]) -> torch.Tensor:
+def joint_mirror(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg,
+    mirror_joints: list[list[str]],
+    command_name: str | None = None,
+) -> torch.Tensor:
+    """Penalize L/R asymmetry ``(L-R)^2`` on joint pairs that mirror with the SAME sign.
+
+    ``command_name`` (optional): if given, the penalty is applied ONLY on the standing envs of
+    that velocity command. This matters for walking: a gait is ANTI-PHASE by construction, so an
+    ungated ``(L-R)^2`` penalizes exactly what makes stepping work. Measured on the 2026-09-04
+    run: the term sat at -0.023/-0.031, i.e. actively violated by the gait, against a
+    ``track_lin_vel_xy`` of +0.73 (~4% drag). Gating it on standing envs keeps the intent
+    (a symmetric squat) and removes the conflict.
+    """
     # extract the used quantities (to enable type-hinting)
     asset: Articulation = env.scene[asset_cfg.name]
     if not hasattr(env, "joint_mirror_joints_cache") or env.joint_mirror_joints_cache is None:
@@ -304,6 +353,8 @@ def joint_mirror(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, mirror_joint
             dim=-1,
         )
     reward *= 1 / len(mirror_joints) if len(mirror_joints) > 0 else 0
+    if command_name is not None:
+        reward = reward * env.command_manager.get_term(command_name).is_standing_env
     return reward
 
 

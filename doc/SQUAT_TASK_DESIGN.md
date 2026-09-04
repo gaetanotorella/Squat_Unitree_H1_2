@@ -136,6 +136,23 @@ dopo l'export. ⇒ **ri-lanciare `play` su `model_3500`** per ottenere un `deplo
 | **test robot reale** | `eth0`, `enp3s0`, … | **`exp_<ts>/`** (creata dal controllore) | **no** |
 | controllore senza simulatore | `lo` | `ctrl_only_<ts>/` | no |
 
+**Tracciabilità della policy.** Ogni run scrive anche un **`run_info.md`** nella propria cartella, con
+la policy effettivamente caricata e il contesto:
+
+```markdown
+- **policy_dir**: .../logs/rsl_rl/unitree_h1_2_squat/2026-09-01_19-20-07
+- **policy_name**: 2026-09-01_19-20-07
+- **controller**: h1_2_ctrl_squat
+- **network**: enp3s0  -> ROBOT REALE
+- **n_obs**: 93     - **base_height_range**: [0.55, 0.98]
+```
+
+Serve perché il controllore, quando `policy_dir` in `config.yaml` non è esplicita, **sceglie da solo**
+la run più recente con `exported/`: senza questo file, dato un log non c'era modo di risalire alla
+policy che l'ha prodotto. Il percorso è preso da `param::policy_dir`, valorizzato in
+`parser_policy_dir()`, quindi vale per **tutti** i controllori. `tools/analyze_sim.py` lo legge e lo
+stampa in testa a ogni analisi (e avvisa se manca, come nei log precedenti a questa modifica).
+
 Il simulatore viene riconosciuto dalla presenza di `ground_truth.csv` **scritto da meno di 120 s**
 (si guarda la mtime del file, non della cartella: appendere non aggiorna la mtime della directory).
 Prima il controllore agganciava semplicemente la `sim_*` più recente e **sovrascriveva i CSV di un run

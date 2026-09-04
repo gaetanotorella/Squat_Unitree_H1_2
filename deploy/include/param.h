@@ -50,6 +50,11 @@ inline YAML::Node config;
 // e nessun ground truth) oppure agganciare la sim_<ts> creata dal simulatore.
 inline std::string network_iface;
 
+// Cartella della policy effettivamente caricata, risolta da parser_policy_dir().
+// Serve alla tracciabilita': il logger la scrive in run_info.md dentro la cartella del run,
+// cosi' da ogni sim_log/exp_log si risale SEMPRE alla policy che l'ha prodotto.
+inline std::filesystem::path policy_dir;
+
 inline std::filesystem::path get_bin_path() {
     std::vector<char> path(1024);
     ssize_t len = readlink("/proc/self/exe", &path[0], path.size());
@@ -118,6 +123,7 @@ inline std::filesystem::path parser_policy_dir(std::filesystem::path policy_dir)
         }
     }
     spdlog::info("Policy directory: {}", policy_dir.string());
+    param::policy_dir = policy_dir;  // memorizzata per run_info.md (tracciabilita' dei log)
     return policy_dir;
 }
 

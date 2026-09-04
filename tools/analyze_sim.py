@@ -24,6 +24,7 @@ Uso:
     python3 analyze_sim.py [cartella_run]     # default: ultima sim_* in ~/sim_logs (o ~/unitree_ws/sim_logs)
 """
 import os
+import re
 import sys
 import glob
 import numpy as np
@@ -233,6 +234,16 @@ def main():
     gt = pd.read_csv(gt_path) if os.path.exists(gt_path) else None
     real_robot = gt is None
     print(f"== Modalita': {'ROBOT REALE (nessun ground truth)' if real_robot else 'simulazione MuJoCo'}")
+
+    # run_info.md: scritto dal controllore, dice DA QUALE POLICY viene questo log
+    info_path = os.path.join(run, "run_info.md")
+    if os.path.exists(info_path):
+        info = dict(re.findall(r"-\s+\*\*(\w+)\*\*:\s*(.+)", open(info_path).read()))
+        print(f"== Policy: {info.get('policy_name', '?')}   ({info.get('controller', '?')}, "
+              f"{info.get('n_obs', '?')} obs, squat {info.get('base_height_range', '?')})")
+        print(f"   {info.get('policy_dir', '')}")
+    else:
+        print("== Policy: SCONOSCIUTA (run_info.md assente: log prodotto da un controllore precedente al tracciamento)")
 
     leg_idx = [i for i in range(27) if not is_arm(JOINT_NAMES[i])]
     arm_idx = [i for i in range(27) if is_arm(JOINT_NAMES[i])]

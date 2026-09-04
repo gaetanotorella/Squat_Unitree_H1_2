@@ -111,6 +111,50 @@ class EventCfg:
         },
     )
 
+    # Incertezza di modello sulla massa dei singoli link: il MJCF pesa 67.0 kg contro i ~70 kg
+    # reali. "startup" perche' serve solo COPERTURA statistica (e' incertezza di modello, non
+    # cambia nel tempo): 4096 env = 4096 campioni, sufficienti.
+    randomize_link_masses = EventTerm(
+        func=mdp.randomize_rigid_body_mass,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names=".*"),
+            "mass_distribution_params": (0.85, 1.15),
+            "operation": "scale",
+        },
+    )
+
+    # Il training usa un PD IDEALE: sul robot vero la rigidezza effettiva differisce. "startup"
+    # per non interferire con lo stato interno del modello di attuatore.
+    randomize_actuator_gains = EventTerm(
+        func=mdp.randomize_actuator_gains,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
+            "stiffness_distribution_params": (0.8, 1.2),
+            "damping_distribution_params": (0.8, 1.2),
+            "operation": "scale",
+        },
+    )
+
+    # *** IL FIX PRINCIPALE PER IL ROBOT REALE ***
+    # Sul robot vero il baricentro e' risultato 3-6 cm PIU' INDIETRO di quanto il modello preveda
+    # (stimato dalla coppia di caviglia a regime, tau = M*g*d), consumando piu' della meta' del
+    # margine di ribaltamento all'indietro (10.7 cm in sim -> 4.1 cm reale, tallone a -8.6 cm):
+    # da li' l'inclinazione all'indietro e la caduta appena comandato lo squat.
+    # "reset" (NON startup): il valore deve cambiare ad ogni episodio, altrimenti la history
+    # (history_length=5) non ha nulla da inferire e la policy diventa solo conservativa invece
+    # che adattiva. Copertura: 4096 env x ~120 episodi ~= 500k campioni contro i 4096 di startup.
+    randomize_base_com = EventTerm(
+        func=mdp.randomize_body_com,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names=["pelvis", "torso_link"]),
+            # il range DEVE contenere il valore reale misurato (3-6 cm all'indietro)
+            "com_range": {"x": (-0.08, 0.08), "y": (-0.03, 0.03), "z": (-0.02, 0.02)},
+        },
+    )
+
     # reset
     base_external_force_torque = EventTerm(
         func=mdp.apply_external_force_torque,
@@ -203,7 +247,13 @@ class ObservationsCfg:
         gait_phase = ObsTerm(func=mdp.gait_phase, params={"period": 0.8, "command_name": "base_velocity"})
 
         def __post_init__(self):
-            # self.history_length = 5
+            # 5 frame (100 ms) di storia. NECESSARIA perche' la randomizzazione del baricentro
+            # abbia effetto: uno sbilanciamento del CoM e' un parametro PERSISTENTE e non
+            # osservabile in un singolo frame. Senza memoria la policy puo' solo essere
+            # conservativa; con la storia puo' dedurre "sono inclinato in modo persistente
+            # nonostante stia correggendo -> il mio baricentro e' spostato" e compensare.
+            # Il deploy C++ la supporta gia' (chiave use_gym_history in observation_manager.h).
+            self.history_length = 5
             self.enable_corruption = True
             self.concatenate_terms = True
 
