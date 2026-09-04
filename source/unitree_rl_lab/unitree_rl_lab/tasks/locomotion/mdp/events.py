@@ -28,9 +28,23 @@ def randomize_body_com(
     (10.7 cm in sim -> 4.1 cm real, with the heel edge at -8.6 cm) and made the robot tip onto
     its heels as soon as a squat was commanded.
 
-    Randomizing the MASS alone does NOT cover this: ``torso_link`` has its CoM at x = +0.0005 m,
-    so adding -1..+3 kg there moves the whole-body CoM horizontally by only 0.08 cm (measured) --
-    40-80x too little. What matters is randomizing WHERE the mass is, not how much.
+    Randomizing the MASS alone does NOT cover this. Measured over 20,000 draws of the per-link
+    mass randomization (iid scale 0.85-1.15 on every body), the whole-body CoM moves horizontally
+    by sigma = 0.08 cm, at most 0.29 cm -- 4% of what is needed -- because the mass distribution
+    is nearly fore-aft symmetric and the perturbations average out. It moves the CoM VERTICALLY
+    (sigma 0.87 cm), not fore-aft. What matters is randomizing WHERE the mass is, not how much.
+    The two randomizations are orthogonal properties of the same rigid body (PhysX stores mass,
+    CoM and inertia separately), so they compose without conflict.
+
+    SELECT ALL BODIES. The offset below is SHARED by every selected body, i.e. a RIGID SHIFT of
+    the mass distribution, so the whole-body CoM moves by ``mass_fraction(selected) * offset``:
+    ``pelvis`` + ``torso_link`` are only 35.5% of the 67 kg, which silently divides the requested
+    range by ~3. With ``body_names=".*"`` the ratio is exactly 1:1 and the configured number is
+    the real one -- and it stays 1:1 even with mass randomization active, since
+    ``sum(m_i*s_i*D)/sum(m_i*s_i) = D`` for any per-link scaling ``s_i``.
+
+    Per-link INDEPENDENT offsets would be the wrong design here: their whole-body effect averages
+    down as 1/sqrt(N), so with 28 bodies you would need +-40 cm per link to obtain +-8 cm overall.
 
     Use ``mode="reset"``: the offset must be resampled every episode so the policy has to INFER
     it from the observation history rather than see one fixed value per environment.

@@ -113,6 +113,51 @@ def ankle_torque_standing(
     return torch.sum(torch.abs(torque), dim=1) * is_standing * standing_tall
 
 
+def flat_orientation_asym(
+    env: ManagerBasedRLEnv,
+    height_command_name: str = "base_height",
+    nominal_height: float = 0.98,
+    deepest_height: float = 0.60,
+    forward_deadband: float = 0.35,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Asymmetric replacement for ``flat_orientation_l2``: free forward lean while squatting.
+
+    WHY (support polygon geometry, measured from the MJCF): the foot spans +17.3 cm at the toe
+    but only -8.6 cm at the heel about the ankle. Leaning BACKWARD is therefore twice as costly
+    in stability margin as leaning forward, and forward lean is the RECOVERY direction when the
+    centre of mass sits behind the ankles (the failure mode measured on the real robot).
+    Penalizing both directions equally, as ``flat_orientation_l2`` does, contradicts that
+    asymmetry: it taxes the very posture the deep squat needs.
+
+    Shape:
+      * roll (``g_y``) is penalized quadratically at all times -- it is never useful;
+      * backward pitch (``g_x < 0``) is penalized quadratically at all times;
+      * forward pitch (``g_x > 0``) is free inside a dead-band that grows LINEARLY with the
+        commanded squat depth, and quadratic beyond it.
+
+    At the nominal standing height the dead-band is exactly 0, so this term is bit-for-bit
+    identical to ``flat_orientation_l2`` while standing and walking tall -- the walking posture
+    learned so far is preserved, and there is no discontinuity when the squat starts.
+
+    Args:
+        forward_deadband: dead-band at the DEEPEST squat, in units of ``g_x`` (= sin(pitch)).
+            0.35 ~= 20 deg. Measured reference: the policy leans +6.5 deg at full squat in sim.
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    grav = asset.data.projected_gravity_b
+    # g_x > 0 <=> nose-down (forward) lean; g_x < 0 <=> backward lean
+    gx, gy = grav[:, 0], grav[:, 1]
+
+    height_cmd = env.command_manager.get_command(height_command_name).squeeze(-1)
+    depth_frac = ((nominal_height - height_cmd) / (nominal_height - deepest_height)).clamp(0.0, 1.0)
+    deadband = forward_deadband * depth_frac
+
+    backward = gx.clamp(max=0.0)
+    forward_excess = (gx - deadband).clamp(min=0.0)
+    return gy.square() + backward.square() + forward_excess.square()
+
+
 """
 Squat (base height) rewards.
 """

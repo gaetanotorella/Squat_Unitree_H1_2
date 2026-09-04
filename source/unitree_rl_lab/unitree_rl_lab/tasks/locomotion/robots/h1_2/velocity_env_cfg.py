@@ -145,13 +145,23 @@ class EventCfg:
     # "reset" (NON startup): il valore deve cambiare ad ogni episodio, altrimenti la history
     # (history_length=5) non ha nulla da inferire e la policy diventa solo conservativa invece
     # che adattiva. Copertura: 4096 env x ~120 episodi ~= 500k campioni contro i 4096 di startup.
+    # TUTTI i link, non solo pelvis+torso. La funzione applica lo STESSO offset a tutti i corpi
+    # selezionati, quindi e' una TRASLAZIONE RIGIDA della distribuzione di massa e lo spostamento
+    # del CoM globale e' scalato dalla frazione di massa selezionata:
+    #   pelvis+torso = 23.77/67.0 = 35.5%  ->  +-8 cm impostati davano solo +-2.8 cm EFFETTIVI,
+    #   cioe' meno del disallineamento reale misurato: il round 3 addestrava fuori distribuzione.
+    #   tutti i link = 100%  ->  rapporto 1:1, il numero qui sotto e' quello vero.
+    # Vale anche con randomize_link_masses attivo: sum(m_i*s_i*D)/sum(m_i*s_i) = D per ogni s_i.
+    # RANGE x = +-0.06 (non +-0.08): l'ERRORE DI MODELLO misurato e' ~3-4 cm (stessa policy, da
+    # fermo: il CoM si assesta a +0.6/+1.3 cm in sim e a -2.4/-3.0 cm sul reale) -> fattore di
+    # sicurezza 1.5-2x. Con +-8 cm effettivi, sommati alla posa di squat profondo, molti episodi
+    # sarebbero irrecuperabili (il margine al tallone e' solo 8.6 cm) -> collasso suicida.
     randomize_base_com = EventTerm(
         func=mdp.randomize_body_com,
         mode="reset",
         params={
-            "asset_cfg": SceneEntityCfg("robot", body_names=["pelvis", "torso_link"]),
-            # il range DEVE contenere il valore reale misurato (3-6 cm all'indietro)
-            "com_range": {"x": (-0.08, 0.08), "y": (-0.03, 0.03), "z": (-0.02, 0.02)},
+            "asset_cfg": SceneEntityCfg("robot", body_names=".*"),
+            "com_range": {"x": (-0.06, 0.06), "y": (-0.02, 0.02), "z": (-0.02, 0.02)},
         },
     )
 

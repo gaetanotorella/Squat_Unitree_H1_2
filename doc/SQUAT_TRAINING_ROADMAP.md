@@ -212,6 +212,69 @@ meglio cambiare una variabile per volta. È il primo knob se il guadagno yaw res
 
 ---
 
+## 4-ter. ROUND 4 — "bacino dietro le caviglie" (dopo `exp_2026-09-04_18-06-20` / `18-13-04`)
+
+Sul robot reale, con la policy `2026-09-04_15-03-01`, il bacino resta **dietro** le caviglie e arretra
+scendendo. Prima di intervenire ho ricostruito il pitch della base **implicato dalla cinematica a piede
+piatto**, sia dagli angoli misurati sia dagli angoli *target*, per capire se la policy stesse rifiutando
+di inclinarsi in avanti o se non ci riuscisse:
+
+| | pitch IMU | da q **misurati** | da q **TARGET** |
+|---|---|---|---|
+| REALE, in piedi 0.98 | −2.1° | +1.2° | **+15.8°** |
+| REALE, squat 0.73 | −1.6° | +4.0° | **+37.8°** |
+| SIM, in piedi 0.98 | +0.5° | +0.5° | +3.6° |
+| SIM, squat 0.73 | +3.2° | +3.2° | +15.6° |
+
+**La policy chiede già 2.4–4× più lean in avanti che in sim e non lo ottiene**: il collo di bottiglia non
+è la reward, è il **cedimento del PD**. Errori target−misurato da fermo:
+
+| | hip_pitch (kp 250) | knee (kp 400) | ankle_pitch (kp 80) |
+|---|---|---|---|
+| REALE 0.73 | −1.3° | −13.9° | **−18.6°** (−26 N·m) |
+| SIM 0.73 | +0.4° | −12.2° | **−0.6°** |
+
+Il **ginocchio cede uguale** in sim e sul reale → è modellato bene. La divergenza è tutta nella
+**caviglia**, e si autoalimenta: CoM indietro → coppia → cedimento (kp 80) → il corpo ruota indietro →
+CoM ancora più indietro. Due caviglie danno 160 N·m/rad contro una rigidezza da pendolo inverso
+`M·g·h` = 493 N·m/rad (**32%**): l'equilibrio lo tiene solo il loop attivo della policy, quindi ogni
+offset di CoM non modellato si presenta **amplificato**. Riscontro indipendente: lo scarto fra IMU e
+cinematica-a-piede-piatto è 0.0° in sim e **−3.4° in piedi → −5.6° a 0.73 m** sul reale — il piede che
+ruota punte-in-su appoggiandosi sul tallone, cioè il dondolio osservato a occhio.
+
+| # | Problema misurato | Modifica | File |
+|---|---|---|---|
+| 1 | La randomizzazione CoM su `pelvis`+`torso_link` copre solo il **35.5%** della massa → ±8 cm impostati = **±2.8 cm effettivi**, sotto il disallineamento reale (3–7 cm): il round 3 addestrava **fuori distribuzione** | `body_names` → `.*` (rapporto **1:1**), range x **±0.06** | `velocity_env_cfg.py` |
+| 2 | `flat_orientation_l2` (−5.0) penalizza uguale avanti e indietro, ma il poligono d'appoggio è asimmetrico (punta +17.3, tallone −8.6 cm) e il lean avanti è la **manovra di recupero** | nuova `flat_orientation_asym`: rollio e lean **indietro** penalizzati sempre; lean **avanti** libero dentro una banda morta ∝ profondità (0° in piedi → ~20° a fondo squat) | `rewards.py`, `squat_env_cfg.py` |
+
+**Perché ±0.06 e non ±0.08:** l'*errore di modello* misurato è ~3–4 cm (stessa policy da fermo: il CoM si
+assesta a +0.6/+1.3 cm in sim e a −2.4/−3.0 cm sul reale) → fattore di sicurezza 1.5–2×. Con ±8 cm
+**effettivi** sommati alla posa di squat profondo molti episodi sarebbero irrecuperabili (margine al
+tallone: 8.6 cm) → collasso suicida.
+
+**Perché la randomizzazione delle masse NON sostituisce quella del CoM:** su 20 000 estrazioni della
+scala 0.85–1.15 iid per link, il CoM globale si sposta in orizzontale di **σ = 0.08 cm** (max 0.29) —
+il **4%** di quel che serve — perché la distribuzione di massa è quasi simmetrica avanti/indietro e le
+perturbazioni si mediano. Sposta il CoM in **verticale** (σ 0.87 cm). Le due randomizzazioni sono
+proprietà **ortogonali** dello stesso corpo rigido (PhysX tiene `mass`, `com`, `inertia` separate) e si
+compongono senza conflitto: con lo stesso offset D su tutti i link, `Σ(mᵢsᵢD)/Σ(mᵢsᵢ) = D` per ogni sᵢ.
+
+**Perché offset condiviso e non indipendente per link:** l'effetto globale di offset indipendenti si
+media come 1/√N — con 28 corpi servirebbero ±40 cm per link per ottenere ±8 cm complessivi.
+
+**Non fatto di proposito:** alzare la `kp` di caviglia (80 → 160). È l'attacco più diretto al cedimento,
+ma va alzata *insieme* in training e deploy, `randomize_actuator_gains` (0.8–1.2) non copre un fattore 2,
+e c'è una storia documentata di ciclo-limite sulla caviglia. Leva di riserva per il round 5.
+
+**Criteri di successo (sim2sim con CoM spostato, poi reale):**
+- da fermo in piedi, coppia di caviglia **< 15 N·m** totali (era 16 sul reale, ma con CoM randomizzato
+  deve restare tale *anche* con offset iniettato);
+- CoM a **0.73 m** entro **−4 cm** dalla caviglia (era −7.0, margine 1.6 cm);
+- scendere a **0.60 m** sul reale senza dondolio delle punte (mai sceso sotto 0.728);
+- nessuna regressione su `track_lin_vel_xy`, guadagno yaw, sway da fermo.
+
+---
+
 ## 5. Checklist edit (file → modifica)
 
 - [x] `mdp/rewards.py` — aggiunta `joint_action_rate_standing` (P1a)
@@ -222,6 +285,13 @@ meglio cambiare una variabile per volta. È il primo knob se il guadagno yaw res
 - [x] `robots/h1_2/velocity_env_cfg.py` — `track_ang_vel_z` peso 1.0 (P2b). P3b (`track_lin_vel_xy` 1.2) NON
       applicata (priorità bassa, gap sim2sim; da valutare solo se vx resta troppo bassa)
 - [ ] (opz. deploy) `robots/h1_2_squat/config/config.yaml` — kd caviglie (P1c, test sintomatico, non necessario)
+
+**Round 4:**
+
+- [x] `mdp/rewards.py` — aggiunta `flat_orientation_asym` (banda morta in avanti ∝ profondità)
+- [x] `mdp/events.py` — docstring: scaling per frazione di massa, perché offset condiviso e non per-link
+- [x] `robots/h1_2/squat_env_cfg.py` — `flat_orientation` (−5.0) al posto di `flat_orientation_l2` (→ `None`)
+- [x] `robots/h1_2/velocity_env_cfg.py` — `randomize_base_com`: `body_names=".*"`, x ±0.06, y/z ±0.02
 
 > Tutte le modifiche superano `python -m py_compile`. Nessuna tocca obs actor / azioni / deploy.
 

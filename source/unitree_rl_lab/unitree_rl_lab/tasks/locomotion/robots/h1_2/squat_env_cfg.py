@@ -183,9 +183,32 @@ class SquatRewardsCfg(RewardsCfg):
         },
     )
 
+    # -- orientamento del busto ASIMMETRICO, sostituisce flat_orientation_l2 (stesso peso -5.0).
+    # A quota nominale e' IDENTICO al termine che sostituisce (banda morta = 0), quindi la postura
+    # in camminata eretta non cambia; scendendo apre progressivamente l'inclinazione IN AVANTI
+    # fino a ~20 deg a fondo squat, mentre l'inclinazione ALL'INDIETRO resta penalizzata sempre.
+    # Motivo: il poligono d'appoggio e' asimmetrico (punta +17.3 cm, tallone -8.6 cm dalla
+    # caviglia), quindi cadere all'indietro costa il doppio, e il lean in avanti E' la manovra di
+    # recupero quando il CoM sta dietro -- il modo di fallire misurato sul robot reale.
+    # NB: NON e' il collo di bottiglia del "bacino dietro le caviglie" (misurato: la policy chiede
+    # gia' +37.8 deg di lean a 0.73 m e ne realizza -1.6, il limite e' il cedimento del PD di
+    # caviglia). E' allineamento della reward alla geometria, a costo e rischio nulli.
+    flat_orientation = RewTerm(
+        func=mdp.flat_orientation_asym,
+        weight=-5.0,
+        params={
+            "height_command_name": "base_height",
+            "nominal_height": NOMINAL_HEIGHT,
+            "deepest_height": DEEPEST_SQUAT,
+            "forward_deadband": 0.35,  # ~20 deg a fondo squat (in sim la policy ne usa 6.5)
+        },
+    )
+
     def __post_init__(self):
         # fixed-target height penalty -> replaced by track_base_height (variable target)
         self.base_height = None
+        # simmetrico avanti/indietro -> sostituito da flat_orientation (asimmetrico, depth-gated)
+        self.flat_orientation_l2 = None
         # ungated vertical-velocity penalty would fight the squat transition -> replaced by settle_height
         self.base_linear_velocity = None
         # stand_still penalizza |q - q_default| sugli is_standing_env, ma quegli env ricevono anche un
