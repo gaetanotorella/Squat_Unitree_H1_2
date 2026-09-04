@@ -130,8 +130,20 @@ public:
                     std::string term = it->first.as<std::string>();
                     if (term == "scale_first" || term == "use_gym_history") continue;
                     size_t dim = it->second["scale"] ? it->second["scale"].size() : 0;
-                    if (dim == nj) { std::string s = sfx(term); for (auto & j : jn) obs_cols.push_back(j + "_" + s); }
-                    else for (size_t k = 0; k < dim; k++) obs_cols.push_back(term + "_" + std::to_string(k));
+                    // history_length > 1: ObservationManager::compute_group concatena PER TERMINE
+                    // (use_gym_history=false), cioe' H frame consecutivi dello STESSO termine, dal
+                    // piu' VECCHIO al piu' RECENTE. Senza tenerne conto il conteggio non tornava e
+                    // si ricadeva sui nomi generici obs_<i>, che poi venivano riletti come layout a
+                    // frame singolo -- sbagliando ogni termine dopo il primo.
+                    int hist = it->second["history_length"] ? it->second["history_length"].as<int>(1) : 1;
+                    if (hist < 1) hist = 1;
+                    for (int h = 0; h < hist; ++h) {
+                        // il frame corrente tiene i nomi "nudi" (compatibile con i log precedenti),
+                        // i piu' vecchi prendono il suffisso _hm<quanti passi indietro>
+                        const std::string age = (h == hist - 1) ? "" : "_hm" + std::to_string(hist - 1 - h);
+                        if (dim == nj) { std::string s = sfx(term); for (auto & j : jn) obs_cols.push_back(j + "_" + s + age); }
+                        else for (size_t k = 0; k < dim; k++) obs_cols.push_back(term + "_" + std::to_string(k) + age);
+                    }
                 }
             }
             // guardia: se il conteggio non torna, ricadi su nomi generici

@@ -144,15 +144,14 @@ def estimate_base_height_fk(jpos, roll, pitch):
     return out
 
 
-def tilt_from_gravity(obs):
+def tilt_from_gravity(obs, lay):
     """Roll/pitch [rad] da projected_gravity (IMU) -- disponibile anche sul ROBOT REALE.
 
     projected_gravity e' gia' un'osservazione della policy, quindi non richiede nulla in piu' a
     bordo. Formule validate contro il ground_truth di una simulazione: RMS 0.06 deg (roll) e
     0.03 deg (pitch). Lo YAW non e' ricavabile dal vettore gravita' (e' non osservabile).
     """
-    pg = vecc(obs, ["projected_gravity_0", "projected_gravity_1", "projected_gravity_2"],
-              ["obs_3", "obs_4", "obs_5"])
+    pg = oget(obs, lay, "projected_gravity")
     gx, gy, gz = pg[:, 0], pg[:, 1], pg[:, 2]
     roll = np.arctan2(-gy, -gz)
     pitch = np.arctan2(gx, np.sqrt(gy**2 + gz**2))
@@ -169,17 +168,123 @@ def quat_to_rpy(q):
 
 def jmat(df, suffix, fb_prefix, fb_off):
     """Matrice (N,27) in ordine-policy: prova colonne <giunto>_<suffix> (nuove),
-    altrimenti fallback posizionale <fb_prefix><fb_off+i> (CSV vecchi)."""
+    altrimenti fallback posizionale <fb_prefix><fb_off+i> (CSV vecchi).
+
+    Per commands.csv / errors.csv, che hanno SEMPRE colonne nominate. Per obs.csv usare
+    invece obs_layout()/oget(): li' il fallback posizionale dipende dalla storia."""
     named = [f"{n}_{suffix}" for n in JOINT_NAMES]
     if all(c in df.columns for c in named):
         return df[named].to_numpy()
     return df[[f"{fb_prefix}{fb_off + i}" for i in range(27)]].to_numpy()
 
 
-def vecc(df, named, fb):
-    """Colonne nominate (nuove) o fallback posizionale (vecchie)."""
-    cols = named if all(c in df.columns for c in named) else fb
-    return df[cols].to_numpy()
+# ---------------------------------------------------------------------------
+# Layout di obs.csv
+#
+# obs.csv puo' avere colonne NOMINATE (controllore recente) o solo obs_0..obs_N-1.
+# Nel caso posizionale il vettore NON e' un singolo frame: con history_length=H la
+# concatenazione e' PER TERMINE (isaaclab, e observation_manager.h con
+# use_gym_history=false), cioe'
+#     [ termine_1 x H | termine_2 x H | ... ]
+# e dentro ogni termine i frame vanno dal piu' VECCHIO al piu' RECENTE.
+# Leggere obs_0:3 come base_ang_vel e obs_3:6 come projected_gravity (layout a frame
+# singolo) e' quindi sbagliato: sono due LAG DELLO STESSO termine, ed e' il motivo per cui
+# i primi tre riquadri di 08_other_obs uscivano identici. Il layout vero viene ricostruito
+# da params/deploy.yaml della policy indicata in run_info.md.
+# ---------------------------------------------------------------------------
+
+# ordine di default (h1_2 squat) se deploy.yaml non e' raggiungibile
+OBS_TERMS_FALLBACK = [
+    ("base_ang_vel", 3), ("projected_gravity", 3), ("velocity_commands", 3),
+    ("joint_pos_rel", 27), ("joint_vel_rel", 27), ("last_action", 27),
+    ("gait_phase", 2), ("base_height_command", 1),
+]
+
+# termine -> colonne nominate scritte dal controllore (frame piu' recente)
+NAMED_COLS = {
+    "joint_pos_rel": [f"{n}_pos" for n in JOINT_NAMES],
+    "joint_vel_rel": [f"{n}_vel" for n in JOINT_NAMES],
+    "last_action": [f"{n}_act" for n in JOINT_NAMES],
+}
+
+
+def parse_deploy_obs(path):
+    """[(termine, dim, history_length)] nell'ordine di concatenazione, da deploy.yaml.
+
+    Parser minimale a regex: il venv che esegue questo script non ha PyYAML."""
+    m = re.search(r"^observations:\n(.*?)(?=\n\S|\Z)", open(path).read(), re.S | re.M)
+    if not m:
+        return None
+    terms = []
+    for block in re.split(r"\n  (?=\S)", "\n" + m.group(1)):
+        mn = re.match(r"\s*([A-Za-z_]\w*):", block)
+        if not mn or mn.group(1) in ("scale_first", "use_gym_history"):
+            continue
+        mh = re.search(r"history_length:\s*(\d+)", block)
+        ms = re.search(r"scale:\s*(.*?)(?=\n\s{4}\w+:|\Z)", block, re.S)
+        dim = None
+        if ms and "null" not in ms.group(1).lower():
+            dim = len(re.findall(r"-?\d+\.?\d*(?:[eE][-+]?\d+)?", ms.group(1)))
+        terms.append((mn.group(1), dim, int(mh.group(1)) if mh else 1))
+    return terms or None
+
+
+def obs_layout(obs, run):
+    """dict termine -> colonne di obs.csv del frame PIU' RECENTE (+ nota sulla provenienza)."""
+    lay, hist = {}, 1
+
+    # 1) colonne nominate: il controllore ha gia' risolto il layout
+    named_ok = [t for t, cols in NAMED_COLS.items() if all(c in obs.columns for c in cols)]
+    for t in named_ok:
+        lay[t] = NAMED_COLS[t]
+    for t, d in OBS_TERMS_FALLBACK:
+        if t in lay:
+            continue
+        cols = [f"{t}_{k}" for k in range(d)]
+        if all(c in obs.columns for c in cols):
+            lay[t] = cols
+    if len(lay) >= 4:
+        return lay, "colonne nominate in obs.csv"
+
+    # 2) posizionale: ricostruisci il layout (termini + storia) da deploy.yaml
+    n_obs = sum(c.startswith("obs_") for c in obs.columns)
+    terms, src = None, None
+    info_path = os.path.join(run, "run_info.md")
+    if os.path.exists(info_path):
+        m = re.search(r"-\s+\*\*policy_dir\*\*:\s*(.+)", open(info_path).read())
+        if m:
+            y = os.path.join(m.group(1).strip(), "params", "deploy.yaml")
+            if os.path.exists(y):
+                cand = parse_deploy_obs(y)
+                if cand and all(d for _, d, _ in cand) and \
+                        sum(d * h for _, d, h in cand) == n_obs:
+                    terms, src = cand, "deploy.yaml della policy"
+    if terms is None:
+        # deploy.yaml assente/non combaciante: assume l'ordine standard e deduci la storia
+        base = sum(d for _, d in OBS_TERMS_FALLBACK)
+        for cut in (len(OBS_TERMS_FALLBACK), len(OBS_TERMS_FALLBACK) - 1):  # con/senza squat
+            b = sum(d for _, d in OBS_TERMS_FALLBACK[:cut])
+            if n_obs % b == 0:
+                h = n_obs // b
+                terms = [(t, d, h) for t, d in OBS_TERMS_FALLBACK[:cut]]
+                src = f"ordine di default (history_length={h} dedotta da {n_obs} obs)"
+                break
+        if terms is None:
+            sys.exit(f"Layout di obs.csv non riconosciuto: {n_obs} colonne obs_* "
+                     f"(atteso un multiplo di {base} o {base - 1})")
+
+    off = 0
+    for name, dim, h in terms:
+        hist = max(hist, h)
+        # il frame corrente e' l'ULTIMO blocco della storia del termine
+        lay[name] = [f"obs_{i}" for i in range(off + (h - 1) * dim, off + h * dim)]
+        off += dim * h
+    return lay, f"{src}, frame corrente di history_length={hist}"
+
+
+def oget(obs, lay, term):
+    """Matrice (N, dim) di un termine di osservazione (frame piu' recente)."""
+    return obs[lay[term]].to_numpy()
 
 
 # famiglie per riga (torso escluso: e' l'unico giunto di tronco)
@@ -248,10 +353,13 @@ def main():
     leg_idx = [i for i in range(27) if not is_arm(JOINT_NAMES[i])]
     arm_idx = [i for i in range(27) if is_arm(JOINT_NAMES[i])]
 
-    # ---- posizione VERA dei giunti = joint_pos_rel (obs 9:36) + default
+    # layout di obs.csv: nomi di colonna, oppure indici ricostruiti tenendo conto della storia
+    lay, lay_src = obs_layout(obs, run)
+    print(f"== Layout obs: {lay_src}  ({', '.join(sorted(lay))})")
+
+    # ---- posizione VERA dei giunti = joint_pos_rel + default
     t_obs = obs["ep_t"].to_numpy()
-    jpos_rel = jmat(obs, "pos", "obs_", 9)  # joint_pos_rel (nuovo: <giunto>_pos)
-    jpos = jpos_rel + DEFAULT_JOINT_POS  # broadcasting su 27 colonne
+    jpos = oget(obs, lay, "joint_pos_rel") + DEFAULT_JOINT_POS  # broadcasting su 27 colonne
     plot_part(t_obs, jpos, "legs", "Posizione giunti - GAMBE", "q [rad]",
               os.path.join(outdir, "01_joint_pos_legs.png"))
     plot_part(t_obs, jpos, "arms", "Posizione giunti - BRACCIA", "q [rad]",
@@ -278,7 +386,7 @@ def main():
         # Robot reale: posizione assoluta e yaw NON sono misurabili. Roll/pitch invece si ricavano
         # da projected_gravity (IMU), che e' gia' un'osservazione della policy. Validato contro il
         # ground truth in simulazione: RMS 0.06 deg (roll) e 0.03 deg (pitch).
-        roll_i, pitch_i = tilt_from_gravity(obs)
+        roll_i, pitch_i = tilt_from_gravity(obs, lay)
         fig, ax = plt.subplots(1, 1, figsize=(11, 4.5))
         ax.plot(t_obs, np.degrees(roll_i), label="roll (da IMU)")
         ax.plot(t_obs, np.degrees(pitch_i), label="pitch (da IMU)")
@@ -306,12 +414,12 @@ def main():
     # ---- SQUAT: altezza comandata vs altezza vera + comando altezza
     # base_height_command (obs) = target - nominale (0 = in piedi, <0 = squat). L'altezza VERA
     # e' in ground_truth.base_z ma su un altro clock -> la allineo a obs via wall_t condiviso.
-    if "base_height_command_0" in obs.columns:
+    if "base_height_command" in lay:
         NOMINAL_H = 0.98
-        bh_cmd = obs["base_height_command_0"].to_numpy()
+        bh_cmd = oget(obs, lay, "base_height_command")[:, 0]
         target_h = NOMINAL_H + bh_cmd
         squatting = bh_cmd < -0.03
-        roll_e, pitch_e = tilt_from_gravity(obs)
+        roll_e, pitch_e = tilt_from_gravity(obs, lay)
         h_fk = estimate_base_height_fk(jpos, roll_e, pitch_e)  # None se mujoco/MJCF mancanti
         if real_robot:
             # L'altezza VERA non e' misurabile a bordo, ma e' STIMABILE per cinematica diretta
@@ -357,16 +465,16 @@ def main():
         fig.tight_layout(); fig.savefig(os.path.join(outdir, "09_squat_height.png"), dpi=110); plt.close(fig)
 
     # ---- tutte le altre osservazioni
-    has_squat = "base_height_command_0" in obs.columns
+    has_squat = "base_height_command" in lay
     nrows = 4 if has_squat else 3
     fig, ax = plt.subplots(nrows, 2, figsize=(13, 3 * nrows))
     ax = ax.ravel()
-    bav = vecc(obs, ["base_ang_vel_0", "base_ang_vel_1", "base_ang_vel_2"], ["obs_0", "obs_1", "obs_2"])
-    pg = vecc(obs, ["projected_gravity_0", "projected_gravity_1", "projected_gravity_2"], ["obs_3", "obs_4", "obs_5"])
-    vc = vecc(obs, ["velocity_commands_0", "velocity_commands_1", "velocity_commands_2"], ["obs_6", "obs_7", "obs_8"])
-    gp = vecc(obs, ["gait_phase_0", "gait_phase_1"], ["obs_90", "obs_91"])
-    jv = jmat(obs, "vel", "obs_", 36)  # joint_vel_rel
-    la = jmat(obs, "act", "obs_", 63)  # last_action
+    bav = oget(obs, lay, "base_ang_vel")
+    pg = oget(obs, lay, "projected_gravity")
+    vc = oget(obs, lay, "velocity_commands")
+    gp = oget(obs, lay, "gait_phase")
+    jv = oget(obs, lay, "joint_vel_rel")
+    la = oget(obs, lay, "last_action")
     for k, lab in zip(range(3), ["wx", "wy", "wz"]):
         ax[0].plot(t_obs, bav[:, k], label=lab)
     ax[0].set_title("base_ang_vel (scalata 0.2)"); ax[0].legend(fontsize=7)
@@ -380,7 +488,7 @@ def main():
     ax[4].plot(t_obs, jv, lw=0.6); ax[4].set_title("joint_vel_rel (27, scalata 0.05)")
     ax[5].plot(t_obs, la, lw=0.6); ax[5].set_title("last_action (27)")
     if has_squat:
-        bhc = obs["base_height_command_0"].to_numpy()
+        bhc = oget(obs, lay, "base_height_command")[:, 0]
         ax[6].plot(t_obs, bhc, color="tab:orange"); ax[6].axhline(0, ls="--", lw=0.8, color="gray")
         ax[6].set_title("base_height_command (target - nominale) [m]")
         # riquadro 8: comando altezza assoluto per leggibilita'
@@ -394,7 +502,7 @@ def main():
 
     # ---- metriche a schermo
     if real_robot:
-        roll_i, pitch_i = tilt_from_gravity(obs)
+        roll_i, pitch_i = tilt_from_gravity(obs, lay)
         print("\n== Stabilita' (da IMU: projected_gravity)")
         print(f"  |roll| max = {np.max(np.abs(np.degrees(roll_i))):.1f} deg  |pitch| max = {np.max(np.abs(np.degrees(pitch_i))):.1f} deg")
         print(f"  roll std = {np.degrees(roll_i.std()):.2f} deg   pitch std = {np.degrees(pitch_i.std()):.2f} deg")
@@ -409,10 +517,9 @@ def main():
     print(f"  BRACCIA: |err| medio={np.abs(qerr[:, arm_idx]).mean():.4f}  max={np.abs(qerr[:, arm_idx]).max():.4f} rad")
 
     # ---- SQUAT + command tracking (obs allineate a gt via wall_t)
-    if "base_height_command_0" in obs.columns:
-        bh_cmd = obs["base_height_command_0"].to_numpy()
-        vcmd = vecc(obs, ["velocity_commands_0", "velocity_commands_1", "velocity_commands_2"],
-                    ["obs_6", "obs_7", "obs_8"])
+    if "base_height_command" in lay:
+        bh_cmd = oget(obs, lay, "base_height_command")[:, 0]
+        vcmd = oget(obs, lay, "velocity_commands")
         walking = np.linalg.norm(vcmd, axis=1) > 0.1
         squatting = bh_cmd < -0.03
         standing = (~walking) & (~squatting)
@@ -420,7 +527,7 @@ def main():
         print("== Squat / altezza")
         print(f"  min altezza comandata = {target_h.min():.3f} m  |  fasi: cammino {100*walking.mean():.0f}% / squat {100*squatting.mean():.0f}% / fermo-eretto {100*standing.mean():.0f}%")
         if real_robot:
-            roll_m, pitch_m = tilt_from_gravity(obs)
+            roll_m, pitch_m = tilt_from_gravity(obs, lay)
             h_est = estimate_base_height_fk(jpos, roll_m, pitch_m)
             if h_est is None:
                 print("  (altezza effettiva non disponibile: nessuna misura diretta e stima FK non calcolabile)")
@@ -438,7 +545,7 @@ def main():
                 if m.any():
                     print(f"  {lbl}: |err altezza| medio={np.abs(herr[m]).mean()*100:.2f}cm  max={np.abs(herr[m]).max()*100:.2f}cm")
         # sway per fase (base_ang_vel wx,wy)
-        bav = vecc(obs, ["base_ang_vel_0", "base_ang_vel_1", "base_ang_vel_2"], ["obs_0", "obs_1", "obs_2"])
+        bav = oget(obs, lay, "base_ang_vel")
         print("== Sway base_ang_vel [rad/s] per fase")
         for lbl, m in [("cammino", walking), ("eretto", standing), ("squat", squatting)]:
             if m.sum() > 20:
