@@ -275,6 +275,72 @@ e c'è una storia documentata di ciclo-limite sulla caviglia. Leva di riserva pe
 
 ---
 
+## 4-quater. ROUND 5 — tracking dei comandi (dopo `exp_2026-09-07_11-27-08`)
+
+Il round 4 ha chiuso il problema del baricentro sul robot reale (coppia di caviglia a 0.73 m da
+−52.1 a **−16.8 N·m**, margine da 0.7 a **6.0 cm**, squat fino a **0.662 m**). Resta il tracking dei
+comandi. La diagnosi non è "la policy non ce la fa", è **quanta reward c'è in palio**.
+
+Entrambi i termini usano `exp(−err²/std²)` con **std = 0.5**, contro comandi di ±0.3 m/s laterali e
+±0.5 rad/s: la campana è quasi piatta e restare fermi rende quasi quanto inseguire.
+
+| canale | range | reward in palio (media) | guadagno misurato sim2sim |
+|---|---|---|---|
+| vx | [−0.3, +1.0] | 0.455 | 0.77 |
+| wz | [−0.5, +0.5] | 0.253 | 0.73 |
+| vy | [−0.3, +0.3] | **0.108** | **0.63** |
+
+L'ordine dei guadagni riproduce esattamente l'ordine della reward disponibile.
+
+> **Correzione (misurata su `sim_2026-09-07_14-23-00`).** In una prima stesura avevo scritto che per
+> vy la posta media (0.108) è inferiore al costo di `joint_deviation_hips` (0.120): era un confronto
+> sbagliato, fra la posta *mediata sul range* e il valore *totale* del termine. Il costo che conta è
+> quello **marginale**, misurato: `|q−q_default|` sui fianchi passa da 0.037 da fermo a 0.089 con
+> vy=0.30 e 0.098 con wz=0.50, cioè **+0.045 e +0.055** — ben sotto la posta al comando massimo
+> (0.302 e 0.632). Quindi `joint_deviation_hips` **non è il freno dominante**: lo è la campana piatta
+> (P1). P2 resta giustificata su una base più debole — ai comandi *tipici* di metà range la posta
+> scende a 0.086 e il costo dei fianchi pesa in proporzione molto di più, e penalizzare `hip_yaw`,
+> che serve solo quando il giro è comandato, non ha comunque alcun beneficio.
+
+| # | Problema misurato | Modifica | File |
+|---|---|---|---|
+| P0 | `ankle_torque_margin` spento sotto 0.93 m: dove è acceso la policy compensa il **69%** di uno sbilanciamento di CoM, dove è spento il **43%** — e non è il fine corsa (restano 4.9°), è mancanza di incentivo | gate da "vicino al nominale" a **"assestato alla quota comandata"** (`|h − h_cmd| < tol`) | `rewards.py`, `squat_env_cfg.py` |
+| P1 | campana di tracking quasi piatta; non si può stringere lo `std` perché i curriculum leggono quei termini **per nome** e girano al limite del gate (0.841 vs 0.800; 0.609 vs 0.550) | due termini **aggiuntivi** `track_*_fine` con std 0.25, peso 0.5 → posta ×1.7 (vx), ×2.1 (wz), ×2.5 (vy) | `velocity_env_cfg.py` |
+| P2 | `joint_deviation_hips` (−1.0) penalizzava hip_roll **e** hip_yaw, cioè i giunti che servono a eseguire vy e wz | **split**: `hip_roll` resta −1.0 (guardia anti-spaccata), `hip_yaw` scende a **−0.25** | `velocity_env_cfg.py` |
+| P3 | girare sul posto capitava nel ~2% dei campioni (vx/vy/wz estratti indipendenti + env fermi azzerati) | nuovo `rel_turn_in_place_envs = 0.15` in `UniformLevelVelocityCommand` | `commands/velocity_command.py`, `velocity_env_cfg.py` |
+| P4 | camminare accovacciati è fuori distribuzione (`only_when_standing=True`): guadagni 0.09–0.28 a mezzo squat contro 0.6–0.77 in piedi | **Fase B parziale**: `rel_squat_while_walking = 0.35` | `commands/height_command.py`, `squat_env_cfg.py` |
+| P5 | `action_rate` è la penalità più grossa in assoluto (−0.323) e tassa ogni movimento | −0.05 → **−0.035** | `velocity_env_cfg.py` |
+| P7 | il 35% degli env in cammino campionava profondità fino a 0.60 m, dove i guadagni misurati sono −0.03 / −0.01 / +0.13 e lo sway triplica: gradiente speso su un compito che non riesce | `min_height_while_walking = 0.70` (rimappa affine, non troncamento) | `commands/height_command.py`, `squat_env_cfg.py` |
+| P6 | a 0.60 m la caviglia ha solo **5.8°** di dorsiflessione residua, quindi l'inclinazione del busto è l'unico grado di libertà rimasto per ricentrare il baricentro — e la banda morta lo taglia proprio lì (lean misurato +20.9° contro banda 20.5°) | `forward_deadband` 0.35 → **0.42** (~25°) | `squat_env_cfg.py` |
+
+**Perché vy è strutturalmente svantaggiata:** `track_lin_vel_xy_yaw_frame_exp` usa la **norma**
+dell'errore su (vx, vy) in un unico esponenziale. Quando l'errore su vx domina — e domina, perché vx
+arriva a 1.0 contro 0.3 — il gradiente rispetto a vy si schiaccia: con errore vx 0.2 e vy 0.1,
+azzerare vy porta la reward da 0.82 a 0.85. Se P1 non basta, il passo successivo è un termine
+dedicato al solo vy.
+
+**Rischi da sorvegliare nelle prime ~500 iterazioni:**
+- P1 + P4 spostano peso sulla locomozione a scapito dello squat (`track_base_height` vale 2.94, il
+  termine positivo dominante). Il freno è il curriculum di altezza, che approfondisce solo se
+  `track_base_height > 2.4`: guardare `height_cmd_levels`.
+- P5 interagisce con P1: se `action_rate` risale sopra ~0.40 e la posa torna nervosa, è il primo
+  knob da riportare indietro.
+- P3 riduce la frazione di env che cammina in linea retta: se `terrain_levels` crolla, abbassare
+  `rel_turn_in_place_envs` a 0.10.
+
+**Criteri di successo (sim2sim, con segmenti di comando costante da almeno 8 s):**
+
+| metrica | oggi | obiettivo |
+|---|---|---|
+| guadagno vx in piedi | 0.77 | > 0.85 |
+| guadagno vy in piedi | 0.63 | > 0.80 |
+| guadagno wz in piedi | 0.73 | > 0.85 |
+| guadagno vx / vy a mezzo squat | 0.19–0.28 / 0.09–0.19 | > 0.50 |
+| errore altezza | < 1 cm | invariato |
+| margine al tallone a 0.60 (modello CoM −3.5 cm) | 6.3 cm | ≥ 5 cm |
+
+---
+
 ## 5. Checklist edit (file → modifica)
 
 - [x] `mdp/rewards.py` — aggiunta `joint_action_rate_standing` (P1a)
@@ -292,6 +358,20 @@ e c'è una storia documentata di ciclo-limite sulla caviglia. Leva di riserva pe
 - [x] `mdp/events.py` — docstring: scaling per frazione di massa, perché offset condiviso e non per-link
 - [x] `robots/h1_2/squat_env_cfg.py` — `flat_orientation` (−5.0) al posto di `flat_orientation_l2` (→ `None`)
 - [x] `robots/h1_2/velocity_env_cfg.py` — `randomize_base_com`: `body_names=".*"`, x ±0.06, y/z ±0.02
+
+**Round 5:**
+
+- [x] `mdp/rewards.py` — `ankle_torque_standing`: gate "assestato alla quota comandata", rimosso `nominal_height` (P0)
+- [x] `mdp/commands/velocity_command.py` — `UniformLevelVelocityCommand` con `rel_turn_in_place_envs` (P3)
+- [x] `mdp/commands/height_command.py` — `rel_squat_while_walking` (P4)
+- [x] `robots/h1_2/velocity_env_cfg.py` — `track_*_fine` (P1); split `hip_roll`/`hip_yaw` (P2); `rel_turn_in_place_envs=0.15` (P3); `action_rate` −0.035 (P5)
+- [x] `robots/h1_2/squat_env_cfg.py` — `rel_squat_while_walking=0.35` (P4); `ankle_torque_margin` senza `nominal_height` (P0); `forward_deadband=0.42` (P6); `min_height_while_walking=0.70` (P7)
+- [x] `mdp/commands/height_command.py` — `min_height_while_walking` con rimappa affine (P7)
+
+**Rimandate alla misura post-training (round 6):**
+
+- [ ] range `lin_vel_x` asimmetrico [−0.3, +1.0] → vx all'indietro rende 0.60 contro 1.02 in avanti già da eretto. P1 dovrebbe bastare (posta a |0.3| da 0.302 a 0.68): allargare il range solo se resta sotto 0.80.
+- [ ] asimmetria di imbardata che cresce con la profondità (0.74/0.73 eretto → 0.24/0.03 a 0.60), con `hip_yaw` L−R da −0.5° a −1.3°. Nessun termine copre la simmetria durante il movimento (`squat_symmetry` è gated sugli env fermi, `roll_symmetry` copre solo i roll). La risposta corretta sarebbe un termine sull'asimmetria **media nel tempo**, ma P3+P4 portano quelle situazioni in distribuzione: rimisurare prima di aggiungere codice.
 
 > Tutte le modifiche superano `python -m py_compile`. Nessuna tocca obs actor / azioni / deploy.
 

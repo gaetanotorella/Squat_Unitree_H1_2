@@ -218,6 +218,11 @@ class CommandsCfg:
         asset_name="robot",
         resampling_time_range=(10.0, 10.0),
         rel_standing_envs=0.2,
+        # P3: il giro sul posto (comando lineare nullo + yaw significativo) capitava per caso nel
+        # ~2% dei campioni, perche' vx/vy/wz sono estratti in modo indipendente. Con 0.15 diventa
+        # uno scenario allenato esplicitamente -- ed e' anche la condizione che rende finalmente
+        # non-inerte turn_lateral_drift, se lo riattiveremo.
+        rel_turn_in_place_envs=0.15,
         rel_heading_envs=1.0,
         heading_command=False,
         debug_vis=True,
@@ -301,6 +306,33 @@ class RewardsCfg:
     track_ang_vel_z = RewTerm(
         func=mdp.track_ang_vel_z_exp, weight=1.0, params={"command_name": "base_velocity", "std": math.sqrt(0.25)}
     )
+    # -- P1: TRACKING A DUE SCALE --------------------------------------------------------------
+    # I due termini sopra hanno std=0.5 contro comandi di +-0.3 m/s laterali e +-0.5 rad/s: la
+    # campana e' quasi piatta su tutto il range, quindi restare fermi rende quasi quanto inseguire.
+    # Reward MEDIA in palio (differenza fra inseguimento perfetto e immobilita'), misurata:
+    #     vx [-0.3,1.0] -> 0.455    wz [-0.5,0.5] -> 0.253    vy [-0.3,0.3] -> 0.108
+    # e i guadagni misurati in sim2sim seguono lo stesso ordine: vx 0.77, wz 0.73, vy 0.63.
+    # Per vy la reward in palio (0.108) e' addirittura INFERIORE al costo del solo
+    # joint_deviation_hips (0.120): muoversi di lato era un affare in perdita.
+    #
+    # Questi due termini AGGIUNTIVI hanno campana stretta e portano il montepremi a
+    #     vx 0.792 (1.7x)    wz 0.533 (2.1x)    vy 0.272 (2.5x)
+    # senza toccare quelli originali -- necessario perche' i curriculum leggono i termini PER NOME
+    # (`get_term_cfg("track_lin_vel_xy")`) e girano gia' al limite del loro gate:
+    #     track_lin_vel_xy 0.841 vs soglia 0.800   |   track_ang_vel_z 0.609 vs soglia 0.550
+    # Stringere lo std di quelli esistenti avrebbe chiuso entrambi i gate facendo collassare il
+    # range dei comandi. Peso 0.5 e non 1.0: aggiunge ~0.8 al bilancio positivo (oggi 6.48) e
+    # sposta gia' abbastanza l'equilibrio verso la locomozione a scapito di track_base_height (2.94).
+    track_lin_vel_xy_fine = RewTerm(
+        func=mdp.track_lin_vel_xy_yaw_frame_exp,
+        weight=0.5,
+        params={"command_name": "base_velocity", "std": 0.25},
+    )
+    track_ang_vel_z_fine = RewTerm(
+        func=mdp.track_ang_vel_z_exp,
+        weight=0.5,
+        params={"command_name": "base_velocity", "std": 0.25},
+    )
 
     alive = RewTerm(func=mdp.is_alive, weight=0.15)
 
@@ -309,7 +341,12 @@ class RewardsCfg:
     base_angular_velocity = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.05)
     joint_vel = RewTerm(func=mdp.joint_vel_l2, weight=-0.001)
     joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7)
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.05)
+    # P5: -0.035 (era -0.05). E' la penalita' piu' grossa in assoluto (-0.323 alla convergenza) e
+    # tassa OGNI movimento, quindi lavora contro il tracking che P1 vuole spingere. L'anti-chattering
+    # specifico che ci interessa e' ankle_action_smoothness, che resta invariato.
+    # NB: interagisce con P1 -- se action_rate risale sopra ~0.40 e la posa torna nervosa, e' questo
+    # il knob da riportare indietro per primo.
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.035)
     dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-5.0)
     energy = RewTerm(func=mdp.energy, weight=-2e-5)
 
@@ -342,10 +379,23 @@ class RewardsCfg:
         weight=-1.0,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=["torso_joint"])},
     )
-    joint_deviation_hips = RewTerm(
+    # -- P2: hip_roll e hip_yaw separati ---------------------------------------------------------
+    # Erano un unico termine a -1.0 su entrambi, cioe' una penalita' su ESATTAMENTE i giunti che
+    # servono a eseguire i comandi: hip_roll per camminare di lato, hip_yaw per girare. Costava
+    # 0.120 alla convergenza, piu' dell'intera reward media in palio per il canale vy (0.108).
+    # hip_roll resta a -1.0: e' la guardia contro la spaccata (vedi V7.2), e comunque il lato
+    # laterale ha gia' il rinforzo di roll_symmetry e feet_too_near.
+    # hip_yaw scende a -0.25: deviare di imbardata serve SOLO quando il giro e' comandato, quindi
+    # a -1.0 era una tassa diretta sul comando wz.
+    joint_deviation_hip_roll = RewTerm(
         func=mdp.joint_deviation_l1,
         weight=-1.0,
-        params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_hip_roll_joint", ".*_hip_yaw_joint"])},
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_hip_roll_joint"])},
+    )
+    joint_deviation_hip_yaw = RewTerm(
+        func=mdp.joint_deviation_l1,
+        weight=-0.25,
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_hip_yaw_joint"])},
     )
 
     # -- robot

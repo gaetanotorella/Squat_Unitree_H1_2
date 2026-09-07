@@ -43,12 +43,20 @@ class SquatCommandsCfg(CommandsCfg):
         asset_name="robot",
         resampling_time_range=(5.0, 8.0),
         nominal_height=NOMINAL_HEIGHT,
-        # SOSPESA la Fase B (era False nel training 2026-09-04): lo squat-in-cammino e' costato
-        # locomozione in modo misurabile -- terrain_levels 4.78 -> 2.61, track_lin_vel 0.835 ->
-        # 0.733, guadagno vx (cammino eretto) 0.68 -> 0.58 -- e non e' la priorita': sul robot
-        # reale il problema e' stare in piedi con margine. Da riattivare in un round successivo,
-        # eventualmente solo su una FRAZIONE degli env in cammino invece che su tutti.
+        # Fase B riattivata PARZIALMENTE al round 5. Con only_when_standing=False (round 2, tutti
+        # gli env in cammino che squattano) la locomozione era peggiorata in modo misurabile:
+        # terrain_levels 4.78 -> 2.61, track_lin_vel 0.835 -> 0.733, guadagno vx 0.68 -> 0.58.
+        # Il flag resta True e la Fase B passa dalla frazione qui sotto.
         only_when_standing=True,
+        # P4: Fase B PARZIALE. Il 35% degli env in cammino riceve comunque una profondita' di squat,
+        # cosi' camminare accovacciati torna IN distribuzione senza dominare il batch. Misurato:
+        # con only_when_standing=True i guadagni a mezzo squat crollano a 0.09-0.28 contro 0.6-0.77
+        # in piedi; sul robot reale pero' ha camminato 7 passi a 0.863 m, quindi il margine c'e'.
+        rel_squat_while_walking=0.35,
+        # ...ma senza scendere sotto 0.70 mentre cammina: a 0.60 i guadagni misurati sono
+        # -0.03/-0.01/+0.13 e lo sway triplica, quindi quegli env spenderebbero gradiente su un
+        # compito che al momento non riesce. 0.60 resta pienamente disponibile da fermo.
+        min_height_while_walking=0.70,
         velocity_command_name="base_velocity",
         debug_vis=False,
         # start with NO squat (pure standing/walking); curriculum lowers the minimum.
@@ -171,13 +179,18 @@ class SquatRewardsCfg(RewardsCfg):
     # a 4.1 cm dal bordo del tallone). Taratura: in sim la coppia da fermo e' ~14 N·m sui due
     # ankle_pitch; con L1 e peso -7e-4 la penalita' nominale e' ~0.010, in linea con gli altri
     # termini di regolarizzazione (action_rate ~0.05, ankle_action_smoothness ~0.01).
+    # P0: ora ATTIVO A TUTTE LE PROFONDITA' (prima era gated su "vicino alla quota nominale").
+    # Il test sim2sim col baricentro spostato di -3.5 cm (2026-09-06) ha misurato che dove questo
+    # termine e' acceso la policy compensa il 69% dello sbilanciamento, dove e' spento il 43% --
+    # e il 43% non e' dovuto al fine corsa della caviglia (restano 4.9 gradi di margine) ma alla
+    # mancanza di incentivo. Il gate ora e' "assestato alla quota COMANDATA" (|h - h_cmd| < tol),
+    # che esclude il transitorio di discesa/risalita ma non la profondita'.
     ankle_torque_margin = RewTerm(
         func=mdp.ankle_torque_standing,
         weight=-7e-4,
         params={
             "command_name": "base_velocity",
             "height_command_name": "base_height",
-            "nominal_height": NOMINAL_HEIGHT,
             "height_tol": 0.05,
             "asset_cfg": SceneEntityCfg("robot", joint_names=[".*_ankle_pitch_joint"]),
         },
@@ -200,7 +213,11 @@ class SquatRewardsCfg(RewardsCfg):
             "height_command_name": "base_height",
             "nominal_height": NOMINAL_HEIGHT,
             "deepest_height": DEEPEST_SQUAT,
-            "forward_deadband": 0.35,  # ~20 deg a fondo squat (in sim la policy ne usa 6.5)
+            # P6: 0.42 (~25 deg), era 0.35 (~20.5). Il round 4 ha misurato la policy a +20.78 gradi
+            # a fondo squat, cioe' ESATTAMENTE sul recinto: la banda morta e' diventata il vincolo
+            # attivo. E a 0.60 m la caviglia ha solo 5.8 gradi di dorsiflessione residua, quindi il
+            # busto e' l'unico grado di liberta' rimasto per ricentrare il baricentro piu' in basso.
+            "forward_deadband": 0.42,
         },
     )
 

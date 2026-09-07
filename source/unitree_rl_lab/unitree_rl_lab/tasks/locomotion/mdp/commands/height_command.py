@@ -47,7 +47,24 @@ class UniformHeightCommand(CommandTerm):
             # squat only where the velocity command is ~zero; walking envs stay at nominal height
             vel_term = self._env.command_manager.get_term(self.cfg.velocity_command_name)
             standing = vel_term.is_standing_env[env_ids].unsqueeze(1)
-            h = torch.where(standing, h, torch.full_like(h, self.cfg.nominal_height))
+            gets_squat = standing
+            if self.cfg.rel_squat_while_walking > 0.0:
+                # Fase B PARZIALE: una frazione degli env in cammino riceve comunque una profondita'
+                walking_squat = (torch.rand_like(h) < self.cfg.rel_squat_while_walking) & ~standing
+                if self.cfg.min_height_while_walking is not None:
+                    # Pavimento di profondita' SOLO per chi cammina; gli env fermi restano liberi.
+                    # Rimappa affine invece di troncare: un clamp accumulerebbe TUTTI i campioni
+                    # sotto il pavimento su un unico valore (col range [0.60,0.98] e pavimento 0.70
+                    # sarebbe un picco del 26% esattamente a 0.70), qui invece la distribuzione
+                    # resta uniforme su [pavimento, hi].
+                    lo_w = max(lo, self.cfg.min_height_while_walking)
+                    if hi > lo:
+                        h_walk = lo_w + (h - lo) * ((hi - lo_w) / (hi - lo))
+                    else:
+                        h_walk = torch.full_like(h, lo_w)
+                    h = torch.where(walking_squat, h_walk, h)
+                gets_squat = gets_squat | walking_squat
+            h = torch.where(gets_squat, h, torch.full_like(h, self.cfg.nominal_height))
         self.height_command[env_ids] = h
 
     def _update_command(self):
@@ -86,6 +103,35 @@ class UniformHeightCommandCfg(CommandTermCfg):
     only_when_standing: bool = True
     """If True, only standing envs (zero velocity command) receive a squat depth; walking
     envs keep the nominal height. Set False for squat-while-walking (Phase B)."""
+
+    rel_squat_while_walking: float = 0.0
+    """Fraction of the WALKING envs that also receive a squat depth, on top of the standing ones
+    (partial Phase B). Only meaningful when ``only_when_standing`` is True.
+
+    Why a fraction and not the all-or-nothing switch: with ``only_when_standing=False`` (round 2,
+    every walking env squatting) locomotion degraded measurably -- terrain_levels 4.78 -> 2.61,
+    track_lin_vel_xy 0.835 -> 0.733, vx gain 0.68 -> 0.58. With True, walking-while-squatting is
+    out of distribution by construction and the sim2sim gains collapsed to 0.09-0.28 at half squat.
+    A fraction keeps the skill in distribution without letting it dominate the batch."""
+
+    min_height_while_walking: float | None = None
+    """Depth floor applied ONLY to the walking envs selected by ``rel_squat_while_walking``.
+    ``None`` disables it; standing envs are never affected and keep the full curriculum range.
+
+    Why (measured on ``sim_2026-09-07_14-23-00``, full command protocol at three heights): command
+    gains collapse with depth and hit zero at the bottom --
+
+        height   vx fwd   vx bwd    vy      wz
+        0.98      1.02     0.60    0.63    0.73
+        0.76      0.55     0.16    0.13    0.47
+        0.60      0.28    -0.03   -0.01    0.13
+
+    and the sway triples there. It is NOT a torque or range limit -- in single support the knee
+    would use 54% of its limit and the ankle 2% -- but at 0.60 m the gait is simply gone (knee
+    oscillation 0.014 vs 0.123 standing). Letting a third of the walking envs sample depths where
+    locomotion currently yields nothing spends gradient on a task that fails anyway, instead of on
+    0.76-0.85 where the recovery is realistic. Lower the floor in a later round, once walking at
+    half squat is solid."""
 
     @configclass
     class Ranges:

@@ -82,7 +82,6 @@ def ankle_torque_standing(
     env: ManagerBasedRLEnv,
     command_name: str = "base_velocity",
     height_command_name: str = "base_height",
-    nominal_height: float = 0.98,
     height_tol: float = 0.05,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> torch.Tensor:
@@ -97,8 +96,16 @@ def ankle_torque_standing(
     It also attacks the mechanism directly: the foot tilt was proportional to the ankle tracking
     error (r = 0.980), and that error is exactly ``tau / kp``.
 
-    Gated on standing envs AND on a near-nominal height command, so it never fights the squat,
-    where a large ankle torque is legitimate and unavoidable.
+    Gated on standing envs AND on being SETTLED at the commanded height -- at ANY depth, not only
+    near the nominal one. The original version also required a near-nominal height command, on the
+    assumption that "in a squat a large ankle torque is legitimate and unavoidable". The CoM-shifted
+    sim2sim of 2026-09-06 disproved that: on the nominal model the policy holds full squat (0.60 m)
+    with only -2.1 N*m of total ankle torque, and where this term is ACTIVE it absorbs 69% of an
+    injected CoM offset against 43% where it is gated off. The gate was leaving performance on the
+    table exactly where the stability margin is thinnest.
+
+    The settle gate (|h - h_cmd| < height_tol) still keeps the term out of the squat TRANSITION,
+    where a large ankle torque really is unavoidable.
 
     NOTE: uses L1 (|tau|) and not L2 on purpose. The goal is to shape the STEADY-STATE posture,
     not to punish transients: with the square, a 60 Nm recovery spike would cost ~0.7 (about 5x
@@ -109,8 +116,8 @@ def ankle_torque_standing(
     torque = asset.data.applied_torque[:, asset_cfg.joint_ids]
     is_standing = env.command_manager.get_term(command_name).is_standing_env
     height_cmd = env.command_manager.get_command(height_command_name).squeeze(-1)
-    standing_tall = height_cmd > (nominal_height - height_tol)
-    return torch.sum(torch.abs(torque), dim=1) * is_standing * standing_tall
+    settled = torch.abs(asset.data.root_pos_w[:, 2] - height_cmd) < height_tol
+    return torch.sum(torch.abs(torque), dim=1) * is_standing * settled
 
 
 def flat_orientation_asym(
