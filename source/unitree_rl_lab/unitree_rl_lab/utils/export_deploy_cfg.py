@@ -48,6 +48,16 @@ def export_deploy_cfg(env: ManagerBasedRLEnv, log_dir):
             ranges[item_name] = list(ranges[item_name])
         cfg["commands"]["base_velocity"]["ranges"] = ranges
 
+        # Depth-dependent speed scaling: the C++ controller MUST apply the identical formula, in
+        # both `velocity_commands` and `gait_phase`. Exported here so there is a single source of
+        # truth; absent for policies trained without it, and the controller then defaults to 1.0.
+        zero_h = getattr(env.cfg.commands.base_velocity, "speed_scale_zero_height", None)
+        if zero_h is not None:
+            cfg["commands"]["base_velocity"]["speed_scale"] = {
+                "zero_height": float(zero_h),
+                "full_height": float(env.cfg.commands.base_velocity.speed_scale_full_height),
+            }
+
     if hasattr(env.cfg.commands, "base_height"):  # squat task: base-height command
         cfg["commands"]["base_height"] = {}
         if hasattr(env.cfg.commands.base_height, "limit_ranges"):

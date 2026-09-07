@@ -108,6 +108,33 @@ REGISTER_OBSERVATION(last_action)
     return std::vector<float>(data.data(), data.data() + data.size());
 };
 
+// Fattore di scala del comando di velocita' in funzione della profondita' dello squat.
+// DEVE essere identico a UniformLevelVelocityCommand._update_command nel training: i due numeri
+// arrivano da deploy.yaml (generato dalla config di training), quindi la formula sta scritta una
+// volta sola e non puo' divergere. Se `speed_scale` manca -- policy addestrata prima di questa
+// modifica -- il fattore e' 1.0 e il comportamento e' quello di prima.
+//
+// Perche' (misurato in sim2sim, protocollo completo a tre quote):
+//     quota   vx avanti  vx indietro   vy     wz
+//     0.98      1.06        0.80      0.79   0.69
+//     0.78      0.82        0.69       --    0.58
+//     0.60      0.39        0.18      0.03   0.05
+// A fondo squat la locomozione non esiste: chiedergliela lo porta nella sua condizione meno
+// stabile di tutta la sessione (sway 0.057, roll -4.9 deg) senza che si muova.
+inline float squat_speed_scale(isaaclab::ManagerBasedRLEnv * env)
+{
+    const auto cmds = env->cfg["commands"]["base_velocity"];
+    if (!cmds["speed_scale"])
+        return 1.0f;
+
+    const float h0 = cmds["speed_scale"]["zero_height"].as<float>();
+    const float h1 = cmds["speed_scale"]["full_height"].as<float>();
+    if (h1 <= h0)
+        return 1.0f;
+
+    return std::clamp((env->squat_target - h0) / (h1 - h0), 0.0f, 1.0f);
+}
+
 REGISTER_OBSERVATION(velocity_commands)
 {
     std::vector<float> obs(3);
@@ -118,6 +145,11 @@ REGISTER_OBSERVATION(velocity_commands)
     obs[0] = std::clamp(joystick->ly(), cfg["lin_vel_x"][0].as<float>(), cfg["lin_vel_x"][1].as<float>());
     obs[1] = std::clamp(-joystick->lx(), cfg["lin_vel_y"][0].as<float>(), cfg["lin_vel_y"][1].as<float>());
     obs[2] = std::clamp(-joystick->rx(), cfg["ang_vel_z"][0].as<float>(), cfg["ang_vel_z"][1].as<float>());
+
+    const float scale = squat_speed_scale(env);
+    obs[0] *= scale;
+    obs[1] *= scale;
+    obs[2] *= scale;
 
     return obs;
 }
@@ -142,6 +174,13 @@ REGISTER_OBSERVATION(gait_phase)
     float vx = std::clamp(joystick->ly(), cmd_cfg["lin_vel_x"][0].as<float>(), cmd_cfg["lin_vel_x"][1].as<float>());
     float vy = std::clamp(-joystick->lx(), cmd_cfg["lin_vel_y"][0].as<float>(), cmd_cfg["lin_vel_y"][1].as<float>());
     float wz = std::clamp(-joystick->rx(), cmd_cfg["ang_vel_z"][0].as<float>(), cmd_cfg["ang_vel_z"][1].as<float>());
+    // La soglia va applicata al comando SCALATO, come nel training: mdp.gait_phase legge il comando
+    // dal command manager, che e' gia' scalato dalla profondita'. Usare qui quello grezzo terrebbe
+    // il clock in moto a fondo squat mentre in addestramento e' congelato -> disallineamento.
+    const float gait_scale = squat_speed_scale(env);
+    vx *= gait_scale;
+    vy *= gait_scale;
+    wz *= gait_scale;
     if (std::sqrt(vx * vx + vy * vy + wz * wz) <= 0.1f)
     {
         obs[0] = 0.0f;

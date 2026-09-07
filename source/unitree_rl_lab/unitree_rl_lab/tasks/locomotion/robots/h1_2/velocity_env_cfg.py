@@ -223,6 +223,13 @@ class CommandsCfg:
         # uno scenario allenato esplicitamente -- ed e' anche la condizione che rende finalmente
         # non-inerte turn_lateral_drift, se lo riattiveremo.
         rel_turn_in_place_envs=0.15,
+        # P8: ampiezza del comando proporzionale alla profondita'. 1.0 sopra 0.95 m, 0 sotto 0.62.
+        # Vale 0.50 a 0.785 e 0.24 a 0.70, in linea con cio' che il robot dimostra di saper fare.
+        # Completa P7: quello impediva agli env in cammino di scendere sotto 0.70, questo impedisce
+        # di chiedere a 0.70 la stessa velocita' che si chiede a 0.98. Applicato IDENTICO nel
+        # controller C++ (velocity_commands e gait_phase) tramite deploy.yaml.
+        speed_scale_zero_height=0.62,
+        speed_scale_full_height=0.95,
         rel_heading_envs=1.0,
         heading_command=False,
         debug_vis=True,
@@ -341,12 +348,18 @@ class RewardsCfg:
     base_angular_velocity = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.05)
     joint_vel = RewTerm(func=mdp.joint_vel_l2, weight=-0.001)
     joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7)
-    # P5: -0.035 (era -0.05). E' la penalita' piu' grossa in assoluto (-0.323 alla convergenza) e
-    # tassa OGNI movimento, quindi lavora contro il tracking che P1 vuole spingere. L'anti-chattering
-    # specifico che ci interessa e' ankle_action_smoothness, che resta invariato.
-    # NB: interagisce con P1 -- se action_rate risale sopra ~0.40 e la posa torna nervosa, e' questo
-    # il knob da riportare indietro per primo.
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.035)
+    # P5 ANNULLATA: tornata a -0.05. Al round 5 l'avevo abbassata a -0.035 pensando fosse una
+    # penalita' sul MOVIMENTO. Misurato: non lo e'. Azioni consecutive sono campionate in modo
+    # indipendente, quindi il rumore di esplorazione contribuisce da solo 2*sigma^2*n_giunti --
+    #     round 4: sigma=0.342 -> contributo 0.316 contro 0.323 misurati = 98%
+    #     round 5: sigma=0.453 -> contributo 0.387 contro 0.410 misurati = 95%
+    # cioe' action_rate misura quasi solo il rumore della policy: e' un regolarizzatore di entropia
+    # implicito. Abbassarne il peso ha reso l'esplorazione piu' economica e sigma e' salito del 32%
+    # (l'equilibrio previsto sigma* = sqrt(entropy_coef/(4w)) da' +20%, il resto lo spiegano
+    # joint_vel e joint_acc). Conseguenze misurate sulla policy ESPORTATA, quindi deterministica:
+    # action_rate grezza da fermo +137%, sway wy da fermo +79%, |wy| massima +68%, gait -23%.
+    # Se serve piu' liberta' di movimento la leva onesta e' entropy_coef, non questa.
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.05)
     dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-5.0)
     energy = RewTerm(func=mdp.energy, weight=-2e-5)
 

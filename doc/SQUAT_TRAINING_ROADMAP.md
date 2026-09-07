@@ -341,6 +341,36 @@ dedicato al solo vy.
 
 ---
 
+## 4-quinquies. ROUND 6 — velocità proporzionale alla profondità, e P5 annullata
+
+Il round 5 ha centrato l'obiettivo sul tracking (misure su `sim_2026-09-07_23-16-17`):
+
+| | eretto 0.98 | half 0.78 | full 0.60 |
+|---|---|---|---|
+| vx avanti | 1.02 → **1.06** | 0.55 → **0.82** | 0.28 → **0.39** |
+| vx indietro | 0.60 → **0.80** | 0.16 → **0.69** | −0.03 → **0.18** |
+| vy | 0.63 → **0.79** | — | −0.01 → 0.03 |
+| wz | 0.73 → 0.69 | 0.47 → **0.58** | 0.13 → 0.05 |
+
+A mezzo squat l'andatura è tornata (ampiezza del ginocchio 1.4–1.7×). A fondo squat no, e non tornerà:
+a 0.60 m il robot ha `hip_pitch` −96°, `knee` +118°, busto +24° e **5.8°** di dorsiflessione residua.
+
+| # | Problema misurato | Modifica | File |
+|---|---|---|---|
+| P5⁻¹ | `action_rate` **non** penalizza il movimento ma il RUMORE: azioni consecutive indipendenti contribuiscono `2σ²·n`, che spiega il **98%** (round 4) e il **95%** (round 5) del valore misurato. Abbassarla ha alzato σ del 32% e degradato la policy **esportata**: action_rate grezza da fermo +137%, sway `wy` da fermo +79%, `\|wy\|` max +68%, `gait` −23% | `action_rate` −0.035 → **−0.05** (annulla P5) | `velocity_env_cfg.py` |
+| P8 | P7 impedisce agli env in cammino di scendere sotto 0.70, ma a 0.70 possono ancora ricevere `vx = 1.0`: stesso spreco di gradiente, un piano più su. E al deploy la levetta a fondo squat manda il robot nella sua condizione meno stabile (sway 0.057, roll −4.9°) senza che si muova | ampiezza del comando **∝ profondità**: 1.0 sopra 0.95 m, 0 sotto 0.62 m. Applicata IDENTICA in training e nel controller C++ | `commands/velocity_command.py`, `export_deploy_cfg.py`, `deploy/.../observations.h`, `velocity_env_cfg.py` |
+
+**Fattore risultante:** 0.85 a 0.90 m, 0.70 a 0.85, **0.50 a 0.785**, 0.24 a 0.70, 0 sotto 0.62.
+
+⚠️ **P8 tocca il deploy, ed è obbligatorio che lo faccia.** Se si scalasse solo in addestramento si
+creerebbe esattamente il disallineamento di distribuzione che la modifica vuole rimuovere. I due
+numeri viaggiano in `deploy.yaml` (`commands.base_velocity.speed_scale`) generato dalla config di
+training, quindi la formula è scritta una volta sola. Va applicata in **`velocity_commands` e in
+`gait_phase`**: quest'ultima usa il comando come soglia di congelamento del clock, e in addestramento
+legge il comando già scalato. Per le policy precedenti la chiave è assente e il fattore vale 1.0.
+
+---
+
 ## 5. Checklist edit (file → modifica)
 
 - [x] `mdp/rewards.py` — aggiunta `joint_action_rate_standing` (P1a)
@@ -368,7 +398,14 @@ dedicato al solo vy.
 - [x] `robots/h1_2/squat_env_cfg.py` — `rel_squat_while_walking=0.35` (P4); `ankle_torque_margin` senza `nominal_height` (P0); `forward_deadband=0.42` (P6); `min_height_while_walking=0.70` (P7)
 - [x] `mdp/commands/height_command.py` — `min_height_while_walking` con rimappa affine (P7)
 
-**Rimandate alla misura post-training (round 6):**
+**Round 6:**
+
+- [x] `robots/h1_2/velocity_env_cfg.py` — `action_rate` −0.05 (annulla P5); `speed_scale_zero_height=0.62`, `speed_scale_full_height=0.95` (P8)
+- [x] `mdp/commands/velocity_command.py` — `_update_command` scala il comando con la profondità (P8)
+- [x] `utils/export_deploy_cfg.py` — esporta `commands.base_velocity.speed_scale` (P8)
+- [x] `deploy/include/isaaclab/envs/mdp/observations/observations.h` — `squat_speed_scale()` applicata in `velocity_commands` **e** `gait_phase` (P8)
+
+**Rimandate alla misura post-training:**
 
 - [ ] range `lin_vel_x` asimmetrico [−0.3, +1.0] → vx all'indietro rende 0.60 contro 1.02 in avanti già da eretto. P1 dovrebbe bastare (posta a |0.3| da 0.302 a 0.68): allargare il range solo se resta sotto 0.80.
 - [ ] asimmetria di imbardata che cresce con la profondità (0.74/0.73 eretto → 0.24/0.03 a 0.60), con `hip_yaw` L−R da −0.5° a −1.3°. Nessun termine copre la simmetria durante il movimento (`squat_symmetry` è gated sugli env fermi, `roll_symmetry` copre solo i roll). La risposta corretta sarebbe un termine sull'asimmetria **media nel tempo**, ma P3+P4 portano quelle situazioni in distribuzione: rimisurare prima di aggiungere codice.
