@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING
 
 from isaaclab.managers import SceneEntityCfg
 
+from .commands.velocity_command import command_gate_threshold
+
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
@@ -50,5 +52,11 @@ def gait_phase(
     # (sul robot reale "fermo" = comando joystick sotto soglia).
     if command_name is not None:
         cmd_norm = torch.norm(env.command_manager.get_command(command_name), dim=1, keepdim=True)
-        phase = phase * (cmd_norm > threshold)
+        # ROUND 7: la soglia scala con la profondita' (vedi command_gate_threshold). A fondo squat
+        # il comando e' identicamente 0 e la soglia ha un pavimento > 0, quindi il clock resta
+        # congelato esattamente come prima.
+        thr = command_gate_threshold(env, command_name, threshold)
+        if torch.is_tensor(thr):
+            thr = thr.unsqueeze(-1)
+        phase = phase * (cmd_norm > thr)
     return phase

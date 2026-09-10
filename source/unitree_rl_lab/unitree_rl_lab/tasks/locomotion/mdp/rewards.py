@@ -11,6 +11,8 @@ from isaaclab.assets import Articulation, RigidObject
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.sensors import ContactSensor
 
+from .commands.velocity_command import command_gate_threshold
+
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
@@ -281,7 +283,9 @@ def feet_height_body(
     foot_z_target_error = torch.square(footpos_in_body_frame[:, :, 2] - target_height).view(env.num_envs, -1)
     foot_velocity_tanh = torch.tanh(tanh_mult * torch.norm(footvel_in_body_frame[:, :, :2], dim=2))
     reward = torch.sum(foot_z_target_error * foot_velocity_tanh, dim=1)
-    reward *= torch.linalg.norm(env.command_manager.get_command(command_name), dim=1) > 0.1
+    reward *= torch.linalg.norm(env.command_manager.get_command(command_name), dim=1) > command_gate_threshold(
+        env, command_name, 0.1
+    )
     reward *= torch.clamp(-env.scene["robot"].data.projected_gravity_b[:, 2], 0, 0.7) / 0.7
     return reward
 
@@ -318,7 +322,11 @@ def feet_contact_without_cmd(
 
     command_norm = torch.norm(env.command_manager.get_command(command_name), dim=1)
     reward = torch.sum(is_contact, dim=-1).float()
-    return reward * (command_norm < 0.1)
+    # ROUND 7: soglia proporzionale alla scala di profondita'. Con la soglia fissa questo termine
+    # si accendeva su tutti gli env accovacciati che AVEVANO un comando di cammino (sotto 0.73 m
+    # il laterale a fondo corsa valeva 0.109), pagandoli 0.5/step per tenere i piedi piantati
+    # mentre track_lin_vel ne metteva in palio 0.135: vinceva stare fermi.
+    return reward * (command_norm < command_gate_threshold(env, command_name, 0.1))
 
 
 def air_time_variance_penalty(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
@@ -365,7 +373,7 @@ def feet_gait(
 
     if command_name is not None:
         cmd_norm = torch.norm(env.command_manager.get_command(command_name), dim=1)
-        reward *= cmd_norm > 0.1
+        reward *= cmd_norm > command_gate_threshold(env, command_name, 0.1)
     return reward
 
 
@@ -438,6 +446,59 @@ def joint_mirror_antisym(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, mirr
     return reward
 
 
+def heading_hold(env: ManagerBasedRLEnv, command_name: str = "base_velocity", std: float = 0.25) -> torch.Tensor:
+    """Reward per la RETTILINEITA' angolare: errore di imbardata INTEGRATO sulla finestra di comando.
+
+    Misurato in sim2sim (sim_2026-09-10_18-08-39), regredendo il rate di imbardata sui bout SENZA
+    comando di yaw:
+
+        omega_deriva [deg/s] ~= +0.72 - 4.45*vx + 6.52*vy      (residuo RMS 0.80)
+
+    cioe' un bias costante piu' un accoppiamento con la direzione di marcia. Camminando di lato a
+    0.30 m/s la deriva vale +2.7 deg/s: in 10 s sono 27 gradi, che curvano visibilmente la
+    traiettoria (fino a 52 cm di scostamento su 2.3 m percorsi). Bias e coefficienti cambiano
+    segno da una policy all'altra a parita' di modello MuJoCo -> e' la policy, non il simulatore.
+
+    Perche' INTEGRATO e non istantaneo: scomponendo il rate sulle due semifasi del passo, le due
+    meta' del ciclo differiscono di 2-7 deg/s, cioe' MOLTO PIU' della deriva netta. La deriva e'
+    il residuo non cancellato di quell'oscillazione. Una penalita' sul rate punirebbe soprattutto
+    l'andatura sana; sull'integrale l'oscillazione si media a zero e resta solo la deriva.
+
+    Perche' i termini esistenti non lo vedono: con std 0.5 e 0.25, una deriva di 2 deg/s
+    (0.035 rad/s) mette in palio 0.0146/step su ~115 di reward totale, cioe' lo 0.013%. E'
+    sotto la risoluzione del reward, non un problema di peso.
+
+    ``std`` in radianti sull'errore accumulato: 0.25 rad = 14 gradi. Con una deriva di 2 deg/s e
+    una finestra di 10 s l'errore finale e' 0.35 rad e la reward media sulla finestra scende a
+    ~0.60 contro 1.0 di una policy senza deriva -- il 40% in palio, contro lo 0.013% di prima.
+    """
+    term = env.command_manager.get_term(command_name)
+    return torch.exp(-torch.square(term.heading_err) / std**2)
+
+
+def path_hold(env: ManagerBasedRLEnv, command_name: str = "base_velocity", std: float = 0.20) -> torch.Tensor:
+    """Reward per la RETTILINEITA' lineare: scostamento laterale INTEGRATO dalla traiettoria comandata.
+
+    Sovrapposto a ogni modalita' di camminata, in sim2sim si misura un creep costante nel
+    riferimento del corpo di (+0.02 avanti, -0.02 a destra) m/s, indipendente dal comando e dal suo
+    segno, assente da fermo. Vale il 7-11% del comando nominale.
+
+    E' anche la spiegazione del giro sul posto: velocita' costante nel body frame + omega costante
+    = arco di cerchio di raggio |v|/omega. Previsto 0.108 e 0.093 m, spostamento netto previsto
+    0.209 e 0.175 m su 152 e 139 gradi di rotazione; misurato 0.208 e 0.182. Accordo entro il 4%.
+
+    L'accumulo (in ``UniformLevelVelocityCommand._accumulate_drift``) usa solo la componente
+    PERPENDICOLARE al comando: quella parallela e' il normale ritardo di inseguimento e
+    penalizzarla renderebbe questo un track_lin_vel piu' duro invece che un termine di
+    rettilineita'.
+
+    ``std`` in metri: 0.20 m. Con il creep misurato l'errore a fine finestra e' 0.2 m e la reward
+    media sulla finestra ~0.75, cioe' il 25% in palio.
+    """
+    term = env.command_manager.get_term(command_name)
+    return torch.exp(-torch.sum(torch.square(term.path_err), dim=1) / std**2)
+
+
 def lateral_drift_on_turn(
     env: ManagerBasedRLEnv,
     command_name: str = "base_velocity",
@@ -455,6 +516,11 @@ def lateral_drift_on_turn(
     asset: Articulation = env.scene[asset_cfg.name]
     command = env.command_manager.get_command(command_name)
     lin_cmd_norm = torch.norm(command[:, :2], dim=1)
-    pure_turn = (lin_cmd_norm < lin_cmd_thresh) & (torch.abs(command[:, 2]) > ang_cmd_thresh)
+    # "comando lineare ~ zero" e' una soglia sul comando -> scala con la profondita', altrimenti a
+    # meta' squat un comando lineare piccolo-ma-vero verrebbe scambiato per assenza di comando.
+    # "yaw significativo" resta assoluta: e' una soglia sull'ENTITA' della manovra da penalizzare.
+    pure_turn = (lin_cmd_norm < command_gate_threshold(env, command_name, lin_cmd_thresh)) & (
+        torch.abs(command[:, 2]) > ang_cmd_thresh
+    )
     lateral_vel = asset.data.root_lin_vel_b[:, 1]
     return torch.square(lateral_vel) * pure_turn

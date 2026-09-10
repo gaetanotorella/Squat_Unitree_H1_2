@@ -371,6 +371,143 @@ legge il comando già scalato. Per le policy precedenti la chiave è assente e i
 
 ---
 
+## 4-sexies. ROUND 7 — banda morta a mezzo squat e rettilineità (dopo `sim_2026-09-10_18-08-39`)
+
+Policy di partenza: `2026-09-08_00-25-08` (round 6). Il round 6 è stato il migliore su quasi
+tutto — reward 109.7 → 115.4, `error_vel_yaw` −21%, σ 0.451 → 0.375, e soprattutto lo squat
+profondo da fermo è diventato quasi rigido (rollSD 0.767 → **0.050°**, sway 0.0156 → **0.0023**,
+gyro 0.0085 → **0.0019**, tenuto 22 s a 0.596 m). Restano due difetti, entrambi diagnosticati
+quantitativamente.
+
+### P10 — soglie "comando ~ zero" proporzionali alla scala di profondità
+
+**Sintomo.** A 0.74 m, con lo stick a fondo corsa: vx avanti guadagno 0.79 (0.29 m/s), ma vx
+indietro 0.09, vy 0.13–0.23, wz 0.35–0.40. Velocità del ginocchio 0.013–0.018 rad/s contro 0.034
+in avanti alla stessa quota e 0.045 in piedi: **non fa il passo**, oscilla sul posto. Non è un
+limite fisico — il round 5, senza scaling, a 0.785 m faceva −0.20 m/s indietro e ±0.23 rad/s.
+
+**Causa.** Lo scaling lineare del round 6 interagisce con tre soglie fisse a 0.1 sulla norma del
+comando, tarate sulla stazione eretta:
+
+| termine | soglia | si spegne (o accende) sotto |
+|---|---|---|
+| `gait_phase` (obs + deploy C++) | `‖cmd‖ > 0.1` | h = 0.730 (vy, vx−) / 0.686 (wz) |
+| `feet_gait` (+0.5) | `‖cmd‖ > 0.1` | idem |
+| `double_support` (+0.5) | `‖cmd‖ < 0.1` | si **accende** sotto 0.730 |
+
+*(`feet_clearance` usa `foot_clearance_reward`, che NON ha gate sul comando: non è coinvolta.
+`feet_height_body` ce l'ha ma non è in config.)*
+
+Con `lin_vel_y ∈ [−0.3, 0.3]` e scale lineare, il laterale a fondo corsa supera 0.1 solo sopra
+0.713 m, e a 0.74 m solo l'8% dei comandi campionati lo supera. Nella fascia 0.62–0.73 il robot
+riceve un target di velocità non nullo mentre il clock del passo è congelato e `double_support`
+lo paga per restare piantato. La vx avanti si salva solo perché il range è asimmetrico
+`[−0.3, 1.0]`. Corollario coerente: `terrain_levels` 4.63 → 3.86, perché gli env squat-walk non
+percorrono più metà della distanza comandata.
+
+**Fix.** `command_gate_threshold(env, name, 0.1)` = `0.1 · max(scale, threshold_min_scale)`, con
+`threshold_min_scale = 0.2`. Il pavimento è necessario: a fondo squat `scale = 0` e una soglia
+nulla renderebbe falso `cmd_norm < thr`, spegnendo il doppio appoggio proprio dove stare fermi è
+tutto ciò che vogliamo. Con il pavimento la soglia a fondo squat è 0.02 e il comando è
+identicamente 0 → clock congelato e doppio appoggio attivo, come prima. Replicato in C++
+(`squat_gait_threshold`), con i parametri esportati in `deploy.yaml`.
+
+### P11 — curva di scaling non lineare
+
+`scale = clamp((h−h0)/(h1−h0))^0.5`. Estremi invariati (0.62 → 0 esatto, 0.95 → 1 esatto), ma
+la fascia intermedia recupera autorità:
+
+| h | lineare | sqrt | vy pieno | wz pieno | soglia |
+|---|---|---|---|---|---|
+| 0.85 | 0.697 | 0.835 | 0.250 | 0.417 | 0.083 |
+| 0.80 | 0.545 | 0.739 | 0.222 | 0.369 | 0.074 |
+| 0.74 | 0.364 | **0.603** | 0.181 | 0.302 | 0.060 |
+| 0.70 | 0.242 | **0.492** | 0.148 | 0.246 | 0.049 |
+
+Con P10+P11 il gate si apre su tutti e quattro gli assi fino a 0.62 m, mentre nel round 6 vy e
+vx− erano già chiusi a 0.72 e wz a 0.66. Verificato che Python e C++ producono numeri identici
+bit per bit su tutta la scala.
+
+### P12 — rettilineità: `heading_hold` e `path_hold`
+
+**Sintomo.** Su percorsi di 2.3–3.0 m il robot esce dalla retta di 15–52 cm. Scomponendo lo
+scostamento fra rotazione non comandata e strisciamento nel body frame:
+
+| bout (h=0.98) | devMONDO | devCORPO | quota imbardata | Δyaw |
+|---|---|---|---|---|
+| vx +0.33, 9.0 s | −0.255 m | −0.188 m | 26% | −2.4° |
+| vx −0.30, 11.1 s | +0.523 m | +0.079 m | **85%** | **+21.0°** |
+| vy −0.30, 8.5 s | +0.155 m | +0.214 m | −38% | −3.3° |
+| vy +0.20, 12.1 s | +0.353 m | −0.229 m | **165%** | **+22.7°** |
+
+**Causa A — deriva di imbardata.** Regressione sui bout senza comando di yaw:
+`ω [°/s] ≈ +0.72 − 4.45·vx + 6.52·vy` (residuo RMS 0.80). Bias e coefficienti cambiano segno da
+una policy all'altra a parità di modello MuJoCo (R4 −2.53 / R5 +0.80 / R6 +0.72) → è la policy,
+non il simulatore. Meccanismo: le due semifasi del passo differiscono di 2–7 °/s e la deriva è il
+residuo non cancellato di quell'oscillazione.
+
+**Causa B — creep costante.** (+0.02 avanti, −0.02 a destra) m/s nel body frame, in ogni modalità
+di cammino, assente da fermo. Spiega anche il comando di yaw: v costante nel body frame + ω
+costante = arco di raggio |v|/ω. Previsto R = 0.108 / 0.093 m e spostamento netto 0.209 / 0.175 m
+su 152° / 139°; **misurato 0.208 / 0.182**. Accordo entro il 4%.
+
+**Perché i termini esistenti non lo vedono.** Con std 0.5/0.25, una deriva di 2 °/s mette in palio
+0.0146/step e un creep di 0.02 m/s ne mette 0.0048, su ~115 di reward totale. È sotto la
+risoluzione del reward, non una questione di peso. E **stringere lo std sul rate sarebbe
+controproducente**: l'oscillazione sana dentro il passo (2–7 °/s) è più grande della deriva, quindi
+si punirebbe l'andatura normale.
+
+**Fix.** Errore **integrato** sulla finestra di comando (10 s), dove l'oscillazione per-passo si
+media a zero e resta solo la deriva. Accumulatori dentro `UniformLevelVelocityCommand`, che è
+l'unico oggetto che sa quando fa il resample:
+
+- `heading_err += (ω_z − ω_cmd)·dt` → `heading_hold = exp(−err²/0.25²)`, peso 0.5
+- `path_err += perp(v_body − v_cmd)·dt` → `path_hold = exp(−‖err‖²/0.20²)`, peso 0.3
+
+Solo la componente **perpendicolare** al comando: quella parallela è il normale ritardo di
+inseguimento (guadagno 0.87 → 0.4 m integrati su 10 s) e penalizzarla renderebbe questo un
+`track_lin_vel` più duro invece che un termine di rettilineità. A comando lineare nullo la
+direzione è indefinita e si accumula tutto il vettore — cioè esattamente il cerchio.
+
+`drift_grace_steps = 25` (0.5 s): senza, ogni termine porterebbe un offset incomprimibile, perché
+raggiungere un comando appena estratto integra ~0.12 rad anche per una policy perfetta.
+
+Montepremi verificato numericamente: con la deriva misurata la reward media sulla finestra è 0.628
+(heading) e 0.626 (path) contro 1.000 di una policy senza deriva → **37% in palio**, contro lo
+0.013% e 0.004% di prima.
+
+### P13 — `lateral_drift_on_turn` riattivato
+
+Era inerte nel 2026-09-04 (reward ferma a −0.000) perché "comando lineare ~0 + yaw significativo"
+era il ~2% dei campioni. Dal round 5 `rel_turn_in_place_envs = 0.15` rende lo scenario esplicito:
+la condizione posta allora è soddisfatta. Peso −2.0. Divisione dei compiti con `path_hold`:
+`path_hold` lavora sull'integrale e cattura il creep costante, questo lavora sull'istante e smorza
+le sbandate di picco. La soglia sul comando lineare ora scala con la profondità; quella sullo yaw
+resta assoluta (0.2) perché misura l'entità della manovra — e con la curva sqrt il wz a fondo
+corsa vale 0.30 a 0.74 m e 0.25 a 0.70 m, quindi resta sopra 0.2 su tutta la fascia in cui il
+robot ha il permesso di camminare accovacciato.
+
+### Verifiche fatte prima del lancio
+
+- `compileall` su tutto `source/unitree_rl_lab`: OK.
+- `g++ -fsyntax-only` su `deploy/robots/h1_2_squat/main.cpp` con tutti gli include: OK.
+- Curva e soglie: Python e C++ identici bit per bit su 0.60–0.98.
+- Trascrizione numpy di `_update_command` + `_accumulate_drift` su 500 step: comando **non**
+  decade (nessun compounding come nel bug P8), env fermi restano a zero esatto, grace rispettato
+  (19.0° = 2 °/s × 9.5 s), reset pulito, proiezione perpendicolare corretta (0.19 m camminando
+  dritto contro 0.269 m in rotazione pura).
+- **Non** testato in esecuzione reale: su questa macchina non c'è torch né IsaacLab.
+
+### Cosa misurare al prossimo sim2sim
+
+1. Rifare la regressione `ω = a + b·vx + c·vy`: il bias +0.72 °/s e i coefficienti −4.45 / +6.52
+   devono scendere in modulo. Target: |ω| < 0.5 °/s su tutti i bout.
+2. Spostamento netto durante 145° di rotazione: 0.19 m → target < 0.08 m.
+3. Guadagni a 0.74 m su vy / vx− / wz: 0.13–0.23 / 0.09 / 0.35–0.40 → target > 0.5 su tutti.
+4. Controllare che lo squat profondo da fermo **non** sia regredito: rollSD 0.050°, sway 0.0023,
+   gyro 0.0019 sono il riferimento da difendere.
+5. `terrain_levels` deve risalire verso 4.6.
+
 ## 5. Checklist edit (file → modifica)
 
 - [x] `mdp/rewards.py` — aggiunta `joint_action_rate_standing` (P1a)

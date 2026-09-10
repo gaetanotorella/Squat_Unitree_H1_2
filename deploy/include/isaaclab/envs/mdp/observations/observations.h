@@ -5,6 +5,9 @@
 
 #include "isaaclab/envs/manager_based_rl_env.h"
 
+#include <algorithm>
+#include <cmath>
+
 namespace isaaclab
 {
 namespace mdp
@@ -121,6 +124,12 @@ REGISTER_OBSERVATION(last_action)
 //     0.60      0.39        0.18      0.03   0.05
 // A fondo squat la locomozione non esiste: chiedergliela lo porta nella sua condizione meno
 // stabile di tutta la sessione (sway 0.057, roll -4.9 deg) senza che si muova.
+//
+// ROUND 7: la curva e' NON LINEARE (esponente esportato, 0.5 = radice). Con la rampa lineare a
+// 0.74 m il fattore valeva 0.364 e il comando laterale/indietro a fondo corsa scendeva a 0.109,
+// appena sopra la soglia 0.1 del clock del passo -- e sotto 0.713 m sempre sotto. Misurato a
+// 0.74 m: guadagno 0.79 in avanti contro 0.09 indietro, 0.13-0.23 laterale, 0.35-0.40 in
+// imbardata. Con esponente 0.5 il fattore a 0.74 diventa 0.60. Estremi invariati.
 inline float squat_speed_scale(isaaclab::ManagerBasedRLEnv * env)
 {
     const auto cmds = env->cfg["commands"]["base_velocity"];
@@ -132,7 +141,27 @@ inline float squat_speed_scale(isaaclab::ManagerBasedRLEnv * env)
     if (h1 <= h0)
         return 1.0f;
 
-    return std::clamp((env->squat_target - h0) / (h1 - h0), 0.0f, 1.0f);
+    const float s = std::clamp((env->squat_target - h0) / (h1 - h0), 0.0f, 1.0f);
+    const float e = cmds["speed_scale"]["exponent"] ? cmds["speed_scale"]["exponent"].as<float>() : 1.0f;
+    return (e == 1.0f) ? s : std::pow(s, e);
+}
+
+// Soglia "comando ~ zero" del clock del passo, proporzionale alla scala di profondita'.
+// DEVE combaciare con command_gate_threshold nel training: la soglia fissa a 0.1 era tarata sulla
+// stazione eretta e con lo scaling apriva una fascia (0.62-0.73 m) in cui il robot riceveva un
+// target di velocita' non nullo con il clock congelato. Il pavimento serve a NON annullare la
+// soglia a fondo squat, dove la scala e' 0: li' il comando e' identicamente 0 e il clock deve
+// restare congelato come prima.
+inline float squat_gait_threshold(isaaclab::ManagerBasedRLEnv * env, float base_threshold)
+{
+    const auto cmds = env->cfg["commands"]["base_velocity"];
+    if (!cmds["speed_scale"])
+        return base_threshold;
+
+    const float floor_ = cmds["speed_scale"]["threshold_min_scale"]
+                             ? cmds["speed_scale"]["threshold_min_scale"].as<float>()
+                             : 0.2f;
+    return base_threshold * std::max(squat_speed_scale(env), floor_);
 }
 
 REGISTER_OBSERVATION(velocity_commands)
@@ -181,7 +210,7 @@ REGISTER_OBSERVATION(gait_phase)
     vx *= gait_scale;
     vy *= gait_scale;
     wz *= gait_scale;
-    if (std::sqrt(vx * vx + vy * vy + wz * wz) <= 0.1f)
+    if (std::sqrt(vx * vx + vy * vy + wz * wz) <= squat_gait_threshold(env, 0.1f))
     {
         obs[0] = 0.0f;
         obs[1] = 0.0f;

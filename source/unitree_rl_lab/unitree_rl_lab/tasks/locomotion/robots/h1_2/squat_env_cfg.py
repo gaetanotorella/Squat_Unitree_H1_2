@@ -170,10 +170,27 @@ class SquatRewardsCfg(RewardsCfg):
     )
     # -- anti-sbandamento in rotazione: girare sul posto era la manovra piu' destabilizzante
     # (roll -9.1 deg e vy spuria fino a 0.45 m/s con wz=-0.5 e comando lineare nullo).
-    # NB: misurato INERTE nel training del 2026-09-04 (reward rimasta a -0.000): lo scenario
-    # "comando lineare ~0 + yaw significativo" e' ~2% dei campioni perche' il campionatore estrae
-    # vx, vy, wz in modo indipendente e gli env fermi azzerano TUTTI e tre i comandi. Va riattivato
-    # solo insieme al campionamento turn-in-place (rimandato al round 4).
+    # Era misurato INERTE nel training del 2026-09-04 (reward ferma a -0.000) perche' lo scenario
+    # "comando lineare ~0 + yaw significativo" capitava nel ~2% dei campioni: il campionatore
+    # estrae vx, vy, wz in modo indipendente. Dal round 5 c'e' rel_turn_in_place_envs=0.15, che
+    # rende lo scenario esplicito -- la condizione posta allora per riattivarlo e' soddisfatta.
+    # ROUND 7: acceso. Divisione dei compiti con path_hold: path_hold lavora sull'INTEGRALE e
+    # cattura il creep costante (il cerchio di raggio 10 cm misurato in sim2sim), questo lavora
+    # sull'ISTANTE e smorza le sbandate di picco durante la rotazione. La soglia sul comando
+    # lineare scala con la profondita' (command_gate_threshold); quella sullo yaw resta assoluta
+    # perche' misura l'entita' della manovra, non l'assenza di comando -- e con la curva sqrt il
+    # wz a fondo corsa vale 0.30 a 0.74 m e 0.25 a 0.70 m, quindi resta sopra 0.2 su tutta la
+    # fascia in cui il robot ha il permesso di camminare accovacciato.
+    lateral_drift_on_turn = RewTerm(
+        func=mdp.lateral_drift_on_turn,
+        weight=-2.0,
+        params={
+            "command_name": "base_velocity",
+            "lin_cmd_thresh": 0.1,
+            "ang_cmd_thresh": 0.2,
+            "asset_cfg": SceneEntityCfg("robot"),
+        },
+    )
     # -- margine di stabilita': tiene il baricentro sopra le caviglie quando si sta in piedi.
     # E' il termine che mancava e che sul robot reale ha fatto la differenza (CoM 4.5 cm dietro,
     # a 4.1 cm dal bordo del tallone). Taratura: in sim la coppia da fermo e' ~14 N·m sui due

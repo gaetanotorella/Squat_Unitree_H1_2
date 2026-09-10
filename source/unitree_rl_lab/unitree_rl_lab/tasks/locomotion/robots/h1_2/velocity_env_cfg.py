@@ -230,6 +230,15 @@ class CommandsCfg:
         # controller C++ (velocity_commands e gait_phase) tramite deploy.yaml.
         speed_scale_zero_height=0.62,
         speed_scale_full_height=0.95,
+        # ROUND 7: curva NON LINEARE. Con l'esponente 1.0 il fattore a 0.74 m valeva 0.364, quindi
+        # vy e vx-indietro a fondo corsa scendevano a 0.109 -- appena sopra la soglia 0.1 del clock
+        # del passo, e sotto 0.713 m sempre sotto. Misurato in sim2sim (2026-09-10) a 0.74 m:
+        # guadagno 0.79 in avanti (comando 0.36, sopra soglia grazie al range asimmetrico
+        # [-0.3, 1.0]) contro 0.09 indietro, 0.13-0.23 laterale, 0.35-0.40 in imbardata, con la
+        # velocita' del ginocchio a 0.015 rad/s contro 0.045 in piedi: non fa il passo.
+        # Con 0.5: 0.74 -> 0.60 (vy pieno 0.18, wz 0.30), 0.85 -> 0.84, 0.70 -> 0.49.
+        # Estremi invariati: 0.62 -> 0 esatto, 0.95 -> 1 esatto.
+        speed_scale_exponent=0.5,
         rel_heading_envs=1.0,
         heading_command=False,
         debug_vis=True,
@@ -339,6 +348,32 @@ class RewardsCfg:
         func=mdp.track_ang_vel_z_exp,
         weight=0.5,
         params={"command_name": "base_velocity", "std": 0.25},
+    )
+
+    # -- ROUND 7: RETTILINEITA' -----------------------------------------------------------------
+    # Misurato in sim2sim (sim_2026-09-10_18-08-39): su percorsi di 2.3-3.0 m il robot esce dalla
+    # retta di 15-52 cm. Due cause indipendenti, entrambe INVISIBILI ai termini di tracking sopra:
+    #
+    #   A) deriva di imbardata non comandata, omega ~= +0.72 - 4.45*vx + 6.52*vy [deg/s]
+    #   B) creep costante nel body frame di (+0.02 avanti, -0.02 a destra) m/s, presente in ogni
+    #      modalita' di cammino e assente da fermo -> durante un comando di yaw puro il bacino
+    #      percorre un cerchio di raggio |v|/omega ~ 10 cm invece di girare sul posto.
+    #
+    # Con std 0.5/0.25 una deriva di 2 deg/s mette in palio 0.0146/step e un creep di 0.02 m/s ne
+    # mette 0.0048, su ~115 di reward totale: sono sotto la risoluzione del reward, non e' una
+    # questione di peso. E stringere lo std sul RATE sarebbe controproducente, perche' le due
+    # semifasi del passo differiscono gia' di 2-7 deg/s: si punirebbe l'andatura sana. Per questo
+    # i due termini qui sotto lavorano sull'errore INTEGRATO sulla finestra di comando (10 s),
+    # dove l'oscillazione per-passo si media a zero e resta solo la deriva.
+    heading_hold = RewTerm(
+        func=mdp.heading_hold,
+        weight=0.5,
+        params={"command_name": "base_velocity", "std": 0.25},
+    )
+    path_hold = RewTerm(
+        func=mdp.path_hold,
+        weight=0.3,
+        params={"command_name": "base_velocity", "std": 0.20},
     )
 
     alive = RewTerm(func=mdp.is_alive, weight=0.15)
