@@ -68,7 +68,10 @@ inline std::filesystem::path get_bin_path() {
 }
 
 /* ---------- config.yaml ---------- */
-inline void load_config_file()
+// proj_dir / config_dir dipendono SOLO da dove sta il binario, mai dal file di config scelto:
+// `parser_policy_dir` risolve i percorsi relativi contro proj_dir, e un config di test messo
+// altrove non deve spostare quella radice.
+inline void resolve_paths()
 {
     assert(std::filesystem::exists(bin_path)); // run param::helper before this function
     if(bin_path.parent_path().filename() == "bin" || bin_path.parent_path().filename() == "build")
@@ -81,9 +84,33 @@ inline void load_config_file()
         proj_dir = bin_path.parent_path();
         config_dir = proj_dir;
     }
+}
+
+// config_override vuoto -> config.yaml di produzione accanto al binario (comportamento storico,
+// invariato). Valorizzato (opzione --config) -> quel file e basta.
+//
+// PERCHE' ESISTE: la procedura di test automatizzata deve poter fissare la policy sotto test
+// senza riscrivere il config di produzione, che e' LO STESSO usato con --network <eth> sul robot
+// reale. Un test interrotto a meta' lasciava il robot reale puntato alla policy del test.
+inline void load_config_file(const std::string & config_override = "")
+{
+    resolve_paths();
+
+    std::string config_file = config_override.empty()
+                                  ? (config_dir / "config.yaml").string()
+                                  : config_override;
+
+    if(!config_override.empty())
+    {
+        if(!std::filesystem::exists(config_file))
+        {
+            spdlog::critical("Config file not found: {}", config_file);
+            exit(1);
+        }
+        spdlog::info("Config file (override): {}", config_file);
+    }
 
     try {
-        std::string config_file = (config_dir / "config.yaml").string();
         if(std::filesystem::exists(config_file))
         {
             config = YAML::LoadFile(config_file);
@@ -134,7 +161,7 @@ namespace po = boost::program_options;
 inline po::variables_map helper(int argc, char** argv) 
 {
     bin_path = get_bin_path();
-    load_config_file();
+    resolve_paths();
 
     po::options_description desc("Unitree Controller");
     desc.add_options()
@@ -142,11 +169,17 @@ inline po::variables_map helper(int argc, char** argv)
         ("version,v", "show version")
         ("log", "record log file")
         ("network,n", po::value<std::string>()->default_value(""), "dds network interface")
+        ("config,c", po::value<std::string>()->default_value(""),
+         "config.yaml alternativo (default: quello accanto al binario). Usato dalla procedura di "
+         "test automatizzata per non toccare il config di produzione.")
         ;
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
     po::notify(vm);
+
+    // il config si carica DOPO il parsing, per poter onorare --config
+    load_config_file(vm["config"].as<std::string>());
 
     network_iface = vm["network"].as<std::string>();
 
