@@ -19,7 +19,8 @@ FIELDS = [
     ("gain_vx",   "gain vx",  +1, 0.10),
     ("gain_vy",   "gain vy",  +1, 0.10),
     ("gain_wz",   "gain wz",  +1, 0.10),
-    ("h_err",     "err quota", 0, 0.010),
+    ("h_ctrl",    "h ctrl",    0, 0.005),   # quota realmente comandata: fra run deve coincidere
+    ("h_err",     "err quota", 0, 0.008),   # inseguimento vero del robot
     ("sway",      "sway",     -1, 0.010),
     ("roll_sd",   "rollSD",   -1, 0.100),
     ("gyro",      "gyro",     -1, 0.002),

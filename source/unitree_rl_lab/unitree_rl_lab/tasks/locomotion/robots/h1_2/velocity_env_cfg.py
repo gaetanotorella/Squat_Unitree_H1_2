@@ -365,15 +365,48 @@ class RewardsCfg:
     # semifasi del passo differiscono gia' di 2-7 deg/s: si punirebbe l'andatura sana. Per questo
     # i due termini qui sotto lavorano sull'errore INTEGRATO sulla finestra di comando (10 s),
     # dove l'oscillazione per-passo si media a zero e resta solo la deriva.
+    #
+    # ROUND 8: entrambi riformulati sull'errore MEDIO (err/tempo) invece che accumulato, e
+    # path_hold portato da 0.3 a 1.0. Misurato sul confronto a cinque policy con lo stesso
+    # protocollo (sim_logs/automatic, 2026-09-13):
+    #   - heading_hold ha funzionato A META': accoppiamenti collassati (vy +6.21 -> -1.07,
+    #     vx -1.54 -> -0.17) ma |omega| solo da 1.70+-0.18 a 1.23+-0.22 deg/s. Colpa della
+    #     saturazione dell'integrale: a 1.7 deg/s su 9.5 s l'errore e' 0.28 rad contro std 0.25.
+    #   - path_hold e' stato CONTROPRODUCENTE: creep laterale da 0.0165+-0.0014 (round 6, senza
+    #     il termine) a 0.0309+-0.0033 m/s, 4 sigma di peggioramento. E in addestramento il suo
+    #     valore e' CALATO (0.183 -> 0.168): a peso 0.3 la policy lo ha semplicemente barattato.
+    # La media non satura, non dipende dalla lunghezza della finestra, e gli std sono ora in
+    # unita' fisiche dirette (rad/s e m/s) tarate sui valori misurati.
+    # heading_hold e' a DUE SCALE, come track_lin_vel/track_ang_vel dopo P1, e per la stessa
+    # ragione. Invertendo il valore del termine nel round 7 (0.1933 a iterazione 1000, peso 0.5)
+    # la deriva implicita a inizio addestramento e' 3.46 deg/s: a std 0.02 il reward li' vale
+    # 0.000 con gradiente 0.0, cioe' una zona morta che sprecherebbe meta' del round. La campana
+    # larga tiene vivo il gradiente da 3.5 deg/s in giu' (0.298 con gradiente 10.9), quella
+    # stretta da' la precisione sotto 1.5 deg/s dove la larga e' ormai piatta.
+    #   deriva   larga(0.06)   stretta(0.02)   totale in palio
+    #   3.46       0.298          0.000            0.089
+    #   1.70       0.783          0.111            0.291
+    #   1.23       0.880          0.316            0.422
+    #   0.50       0.979          0.827            0.708
     heading_hold = RewTerm(
         func=mdp.heading_hold,
-        weight=0.5,
-        params={"command_name": "base_velocity", "std": 0.25},
+        weight=0.3,
+        params={"command_name": "base_velocity", "std": 0.06},
     )
+    heading_hold_fine = RewTerm(
+        func=mdp.heading_hold,
+        weight=0.5,
+        params={"command_name": "base_velocity", "std": 0.02},
+    )
+    # path_hold resta a scala singola: invertendo il suo valore nel round 7 il creep implicito e'
+    # 0.0292 m/s a iterazione 1000 e 0.0324 a fine (contro 0.0309+-0.0033 misurati in deploy --
+    # buona verifica incrociata), e a std 0.03 quel livello vale 0.34 con gradiente 23.7. Nessuna
+    # zona morta. Da notare che il creep e' PEGGIORATO durante l'addestramento (0.0292 -> 0.0324):
+    # a peso 0.3 il termine veniva barattato, da cui il passaggio a 1.0.
     path_hold = RewTerm(
         func=mdp.path_hold,
-        weight=0.3,
-        params={"command_name": "base_velocity", "std": 0.20},
+        weight=1.0,
+        params={"command_name": "base_velocity", "std": 0.03},
     )
 
     alive = RewTerm(func=mdp.is_alive, weight=0.15)
@@ -440,9 +473,14 @@ class RewardsCfg:
         weight=-1.0,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_hip_roll_joint"])},
     )
+    # ROUND 8: -0.25 -> -0.15. hip_yaw e' il giunto con cui la policy sterza, ed e' esattamente
+    # cio' che heading_hold le chiede di fare: nel round 7 la deviazione di hip_yaw e' salita del
+    # 68% (0.0223 -> 0.0375) proprio mentre heading_hold veniva ottimizzato (0.193 -> 0.328). I due
+    # termini si remano contro. Stessa logica gia' scritta nel docstring di joint_mirror_antisym:
+    # "Do NOT apply to hip_yaw: turning legitimately needs L/R yaw asymmetry".
     joint_deviation_hip_yaw = RewTerm(
         func=mdp.joint_deviation_l1,
-        weight=-0.25,
+        weight=-0.15,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_hip_yaw_joint"])},
     )
 

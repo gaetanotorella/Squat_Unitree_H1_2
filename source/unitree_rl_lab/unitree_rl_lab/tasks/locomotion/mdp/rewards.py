@@ -446,8 +446,21 @@ def joint_mirror_antisym(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, mirr
     return reward
 
 
-def heading_hold(env: ManagerBasedRLEnv, command_name: str = "base_velocity", std: float = 0.25) -> torch.Tensor:
-    """Reward per la RETTILINEITA' angolare: errore di imbardata INTEGRATO sulla finestra di comando.
+def _drift_mean(err: torch.Tensor, term, min_time: float) -> torch.Tensor:
+    """Errore MEDIO (per secondo) a partire dall'errore accumulato dal command term.
+
+    Il pavimento su ``drift_time`` evita di dividere per un tempo quasi nullo nei primi istanti
+    dopo il grace: li' l'errore accumulato e' piccolo e il rapporto risulta piccolo, quindi il
+    termine parte generoso e stringe man mano che la finestra si riempie. E' la direzione sicura.
+    """
+    t = term.drift_time.clamp(min=min_time)
+    return err / (t.unsqueeze(-1) if err.dim() == 2 else t)
+
+
+def heading_hold(
+    env: ManagerBasedRLEnv, command_name: str = "base_velocity", std: float = 0.02, min_time: float = 1.0
+) -> torch.Tensor:
+    """Reward per la RETTILINEITA' angolare: errore di imbardata MEDIO sulla finestra di comando.
 
     Misurato in sim2sim (sim_2026-09-10_18-08-39), regredendo il rate di imbardata sui bout SENZA
     comando di yaw:
@@ -459,44 +472,64 @@ def heading_hold(env: ManagerBasedRLEnv, command_name: str = "base_velocity", st
     traiettoria (fino a 52 cm di scostamento su 2.3 m percorsi). Bias e coefficienti cambiano
     segno da una policy all'altra a parita' di modello MuJoCo -> e' la policy, non il simulatore.
 
-    Perche' INTEGRATO e non istantaneo: scomponendo il rate sulle due semifasi del passo, le due
+    PERCHE' MEDIATO E NON ISTANTANEO: scomponendo il rate sulle due semifasi del passo, le due
     meta' del ciclo differiscono di 2-7 deg/s, cioe' MOLTO PIU' della deriva netta. La deriva e'
-    il residuo non cancellato di quell'oscillazione. Una penalita' sul rate punirebbe soprattutto
-    l'andatura sana; sull'integrale l'oscillazione si media a zero e resta solo la deriva.
+    il residuo non cancellato di quell'oscillazione. Una penalita' sul rate istantaneo punirebbe
+    soprattutto l'andatura sana; sulla media l'oscillazione si annulla e resta solo la deriva.
 
-    Perche' i termini esistenti non lo vedono: con std 0.5 e 0.25, una deriva di 2 deg/s
-    (0.035 rad/s) mette in palio 0.0146/step su ~115 di reward totale, cioe' lo 0.013%. E'
-    sotto la risoluzione del reward, non un problema di peso.
+    PERCHE' LA MEDIA E NON L'INTEGRALE (round 8): la prima versione usava l'errore ACCUMULATO con
+    std in radianti. Misurato nel round 7: il termine ha funzionato a meta' -- gli accoppiamenti
+    sono collassati (vy da +6.21 a -1.07, vx da -1.54 a -0.17) ma il modulo complessivo e' sceso
+    solo da 1.70+-0.18 a 1.23+-0.22 deg/s. Il problema e' la saturazione: a 1.7 deg/s su 9.5 s
+    l'errore accumulato e' 0.28 rad contro std 0.25, quindi exp(-1.25) = 0.29 con gradiente gia'
+    quasi piatto. Dividendo per il tempo il termine non satura mai e non dipende dalla lunghezza
+    della finestra.
 
-    ``std`` in radianti sull'errore accumulato: 0.25 rad = 14 gradi. Con una deriva di 2 deg/s e
-    una finestra di 10 s l'errore finale e' 0.35 rad e la reward media sulla finestra scende a
-    ~0.60 contro 1.0 di una policy senza deriva -- il 40% in palio, contro lo 0.013% di prima.
+    ``std`` in rad/s. 0.02 = 1.15 deg/s. Con i valori misurati: R6 (1.70 deg/s) -> 0.11,
+    R7 (1.23) -> 0.32, una policy pulita a 0.3 deg/s -> 0.93. Il range utile e' tutto coperto.
     """
     term = env.command_manager.get_term(command_name)
-    return torch.exp(-torch.square(term.heading_err) / std**2)
+    return torch.exp(-torch.square(_drift_mean(term.heading_err, term, min_time)) / std**2)
 
 
-def path_hold(env: ManagerBasedRLEnv, command_name: str = "base_velocity", std: float = 0.20) -> torch.Tensor:
-    """Reward per la RETTILINEITA' lineare: scostamento laterale INTEGRATO dalla traiettoria comandata.
+def path_hold(
+    env: ManagerBasedRLEnv, command_name: str = "base_velocity", std: float = 0.03, min_time: float = 1.0
+) -> torch.Tensor:
+    """Reward per la RETTILINEITA' lineare: scostamento laterale MEDIO dalla traiettoria comandata.
 
     Sovrapposto a ogni modalita' di camminata, in sim2sim si misura un creep costante nel
-    riferimento del corpo di (+0.02 avanti, -0.02 a destra) m/s, indipendente dal comando e dal suo
-    segno, assente da fermo. Vale il 7-11% del comando nominale.
+    riferimento del corpo, ortogonale al comando, che nessun termine di tracking vede: con std
+    0.5/0.25 un creep di 0.02 m/s mette in palio 0.0048 per step su ~120 di reward totale.
 
     E' anche la spiegazione del giro sul posto: velocita' costante nel body frame + omega costante
     = arco di cerchio di raggio |v|/omega. Previsto 0.108 e 0.093 m, spostamento netto previsto
     0.209 e 0.175 m su 152 e 139 gradi di rotazione; misurato 0.208 e 0.182. Accordo entro il 4%.
+    A comando lineare nullo la direzione e' indefinita e si accumula l'intero vettore velocita',
+    quindi questo termine copre il giro sul posto senza bisogno di un termine dedicato.
 
     L'accumulo (in ``UniformLevelVelocityCommand._accumulate_drift``) usa solo la componente
     PERPENDICOLARE al comando: quella parallela e' il normale ritardo di inseguimento e
     penalizzarla renderebbe questo un track_lin_vel piu' duro invece che un termine di
     rettilineita'.
 
-    ``std`` in metri: 0.20 m. Con il creep misurato l'errore a fine finestra e' 0.2 m e la reward
-    media sulla finestra ~0.75, cioe' il 25% in palio.
+    ROUND 8 -- due correzioni, entrambe misurate:
+
+    1. MEDIA invece di integrale. Nel round 7 il termine e' stato CONTROPRODUCENTE: il creep
+       laterale e' passato da 0.0165+-0.0014 (round 6, senza il termine) a 0.0309+-0.0033 m/s,
+       una differenza di 4 sigma. E in addestramento il suo valore e' CALATO (0.183 -> 0.168):
+       la policy lo ha barattato via.
+    2. Il difetto di fondo della versione a integrale: con ``err = v - cmd`` e la proiezione che
+       toglie la componente lungo il comando, un robot FERMO da' err_perp = -cmd + (cmd.u)u = 0
+       ESATTO. Il termine dava reward pieno a chi non si muove: non distingueva "cammina dritto"
+       da "non cammina". Con la media il problema resta formalmente, ma il peso ora e' 1.0 e il
+       compito di far muovere resta di track_lin_vel, che vale 1.5: l'equilibrio e' corretto.
+
+    ``std`` in m/s. 0.03: con i valori misurati R6 (0.0165) -> 0.74, R7 (0.0309) -> 0.35,
+    il creep in rotazione di R7 (0.068) -> 0.006.
     """
     term = env.command_manager.get_term(command_name)
-    return torch.exp(-torch.sum(torch.square(term.path_err), dim=1) / std**2)
+    mean = _drift_mean(term.path_err, term, min_time)
+    return torch.exp(-torch.sum(torch.square(mean), dim=1) / std**2)
 
 
 def lateral_drift_on_turn(

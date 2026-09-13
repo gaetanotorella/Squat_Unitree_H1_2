@@ -111,6 +111,14 @@ def measure(run: Path):
         m = (d["sim_t"] >= a_sim) & (d["sim_t"] < b_sim)
         if m.sum() < 50:
             continue
+        # Quota di riferimento: il target EFFETTIVAMENTE ricevuto dal controller, non quello scritto
+        # nel protocollo. I due divergono: il joystick scriptato integra la sua rampa contro il
+        # tempo di simulazione, il controller fa `squat_target -= 0.15*step_dt` una volta per passo
+        # di policy con step_dt nominale 0.02, e il suo ciclo gira a ~46 Hz -> sotto-integra dell'8%
+        # e l'errore si accumula a ogni rampa (misurato: 0.85 -> 0.860, 0.74 -> 0.761, 0.66 -> 0.692,
+        # 0.60 -> 0.641). Misurare contro il protocollo attribuiva al robot un cedimento di 4 cm che
+        # era tutto disallineamento del banco: l'errore di inseguimento vero e' <= 5 mm.
+        h_ctrl = float(d["hcmd"][m].mean())
         cx, cy, cw = s["vx"], s["vy"], s["wz"]
         # comando EFFETTIVO visto dalla policy (dopo lo scaling per profondita' del controller)
         sc = d["vc"][m].mean(axis=0)
@@ -118,8 +126,11 @@ def measure(run: Path):
         g = lambda a, c: (a / c) if abs(c) > 0.02 else None
         rows.append({
             "t0": round(s["t0"], 1), "dur": round(b_sim - a_sim, 1),
-            "h_cmd": s["height"], "h_act": round(float(d["bz"][m].mean()), 4),
-            "h_err": round(float(d["bz"][m].mean() - s["height"]), 4),
+            "h_cmd": s["height"],                      # quota chiesta dal protocollo
+            "h_ctrl": round(h_ctrl, 4),                # quota effettivamente comandata al robot
+            "h_act": round(float(d["bz"][m].mean()), 4),
+            "h_err": round(float(d["bz"][m].mean() - h_ctrl), 4),      # inseguimento VERO
+            "h_drift": round(h_ctrl - s["height"], 4),                 # scarto del banco
             "stick": [cx, cy, cw],
             "cmd_scaled": [round(float(v), 3) for v in sc],
             "achieved": [round(float(ax), 3), round(float(ay), 3), round(float(aw), 3)],
@@ -189,8 +200,23 @@ def measure(run: Path):
                       f"gira sul tempo di simulazione e il controller sul suo orologio -> le quote "
                       f"comandate possono non essere quelle del protocollo")
     for r in rows:
-        if abs(r["h_err"]) > 0.05:
-            checks.append(f"t={r['t0']}: quota comandata {r['h_cmd']:.2f} ma misurata {r['h_act']:.3f}")
+        # inseguimento del robot: deve essere stretto, il target e' una rampa lenta gia' assestata
+        if abs(r["h_err"]) > 0.01:
+            checks.append(f"t={r['t0']}: target del controller {r['h_ctrl']:.3f} ma misurata "
+                          f"{r['h_act']:.3f} (errore {r['h_err']:+.3f} m)")
+    # scarto del banco: il controller non ha ricevuto la quota scritta nel protocollo.
+    # Non invalida il confronto fra policy (e' identico in tutti i run), ma va VISTO: con la
+    # vecchia soglia di 5 cm uno scarto di 4.1 cm passava in silenzio. Raggruppato per quota:
+    # altrimenti la stessa riga si ripete per ogni segmento tenuto a quella profondita'.
+    # NB: non chiamarla `drift` -- quel nome e' gia' la regressione della deriva di imbardata
+    # qualche riga sopra, e sovrascriverlo la farebbe sparire dal metrics.json.
+    h_groups: dict = {}
+    for r in rows:
+        if abs(r["h_drift"]) > 0.01:
+            h_groups.setdefault((r["h_cmd"], r["h_ctrl"], r["h_drift"]), []).append(r["t0"])
+    for (hc, hk, hd), ts in sorted(h_groups.items()):
+        checks.append(f"il protocollo chiede {hc:.3f} ma il controller ha ricevuto {hk:.3f} "
+                      f"({hd:+.3f} m di scarto del banco) — segmenti t={', '.join(f'{t:g}' for t in ts)}")
     return {"rtf": round(float(d["rtf"]), 4), "segments": rows, "yaw_drift": drift,
             "straight": straight, "turns": turns, "checks": checks}
 
@@ -209,14 +235,14 @@ def render(run: Path, met: dict) -> str:
         L += ["Tutti i controlli di validita' superati.", ""]
 
     L += ["## Segmenti", "",
-          "| t0 | dur | h cmd | h mis | err | stick | cmd scalato | ottenuto | gain | sway | pitch | rollSD | gyro | gait% | tau cav | knee | Δact |",
-          "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+          "| t0 | dur | h prot | h ctrl | h mis | err | stick | cmd scalato | ottenuto | gain | sway | pitch | rollSD | gyro | gait% | tau cav | knee | Δact |",
+          "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in met["segments"]:
         gains = " / ".join("—" if r[k] is None else f"{r[k]:.2f}" for k in ("gain_vx", "gain_vy", "gain_wz"))
         st = ",".join(f"{v:g}" for v in r["stick"])
         cs = ",".join(f"{v:g}" for v in r["cmd_scaled"])
         ac = ",".join(f"{v:g}" for v in r["achieved"])
-        L.append(f"| {r['t0']} | {r['dur']} | {r['h_cmd']:.2f} | {r['h_act']:.3f} | {r['h_err']:+.3f} | {st} | {cs} | {ac} | {gains} | "
+        L.append(f"| {r['t0']} | {r['dur']} | {r['h_cmd']:.2f} | {r['h_ctrl']:.3f} | {r['h_act']:.3f} | {r['h_err']:+.3f} | {st} | {cs} | {ac} | {gains} | "
                  f"{r['sway']:.4f} | {r['pitch']:.2f} | {r['roll_sd']:.3f} | {r['gyro']:.4f} | {r['gait_pct']:.0f} | "
                  f"{r['tau_ankle']:.1f} | {r['knee_vel']:.4f} | {r['dact']:.4f} |")
 

@@ -508,6 +508,141 @@ robot ha il permesso di camminare accovacciato.
    gyro 0.0019 sono il riferimento da difendere.
 5. `terrain_levels` deve risalire verso 4.6.
 
+## 4-septies. ROUND 8 — dopo il confronto a cinque policy sullo stesso protocollo
+
+Primo confronto fatto con il banco automatico (`tools/run_protocol.py`, protocollo `standard_v1`):
+cinque policy, `rtf = 1.0000` su tutte, `wall_seconds` identico, 21 segmenti confrontabili, zero
+controlli falliti. I run sono in `sim_logs/automatic/`, 2026-09-13.
+
+### Verdetto sul round 7
+
+| modifica | esito |
+|---|---|
+| P10 soglie proporzionali + P11 curva sqrt | **funzionano**: a 0.74 m vx avanti 0.326 → 0.522 m/s (+60%), wz 0.097 → 0.238 e −0.078 → −0.217 (+145% / +178%) |
+| P12 `heading_hold` | **a metà**: accoppiamenti collassati (vy +6.21 → −1.07, vx −1.54 → −0.17) ma \|ω\| solo 1.70±0.18 → 1.23±0.22 °/s |
+| P12 `path_hold` | **controproducente**: creep laterale 0.0165±0.0014 → 0.0309±0.0033 m/s, 4σ di peggioramento |
+| P13 `lateral_drift_on_turn` | **inerte**: −0.0041 su 122 di reward (0.003%); raggio del giro 0.042/0.067 → 0.136/0.118 m |
+
+Il laterale a 0.74 m resta a guadagno 0.25 **nonostante** il comando (0.190) superi ampiamente la
+soglia del clock (0.060): non è più un problema di gate.
+
+### P14 — `heading_hold` e `path_hold` su errore MEDIO, non accumulato
+
+Due difetti della versione a integrale, entrambi misurati:
+
+1. **Satura.** A 1.7 °/s su 9.5 s l'errore accumulato è 0.28 rad contro std 0.25 → reward 0.29 con
+   gradiente già quasi piatto. E il valore dipende dalla lunghezza della finestra: la stessa deriva
+   vale 0.96 su 3 s e 0.37 su 20 s.
+2. **Dà reward pieno all'immobilità.** Con `err = v − cmd` e la proiezione che toglie la componente
+   lungo il comando, un robot fermo dà `err_perp = −cmd + (cmd·u)u = 0` **esatto**: il termine non
+   distingueva "cammina dritto" da "non cammina".
+
+Nuova forma: `exp(−(err/T)²/σ²)` con `T` = tempo attivo (pavimento 1 s), std in unità fisiche.
+Verificato numericamente: il reward è costante da 1.5 s in poi, indipendente dalla finestra.
+
+| | vecchia (in palio) | nuova (in palio) | |
+|---|---|---|---|
+| heading, da R6 (1.70 °/s) a 0.30 °/s | 0.287 | 0.823 | 2.9× |
+| path, da R7 (0.0309) a R6 (0.0165 m/s) | 0.074 | 0.393 | 5.3× |
+
+`path_hold` passa da peso 0.3 a **1.0**: a 0.3 la policy lo barattava via — il suo valore in
+addestramento è *calato* (0.183 → 0.168, cioè creep implicito 0.0292 → 0.0324 m/s, che coincide con
+i 0.0309±0.0033 misurati in deploy).
+
+**`heading_hold` è a due scale** (larga σ=0.06 peso 0.3, stretta σ=0.02 peso 0.5), come
+track_lin_vel dopo P1 e per la stessa ragione. Invertendo il valore del round 7 a iterazione 1000,
+la deriva implicita a inizio addestramento è **3.46 °/s**, dove σ=0.02 darebbe reward 0.000 e
+gradiente 0.0: una zona morta che sprecherebbe metà del round.
+
+| deriva | larga (0.06) | stretta (0.02) | totale in palio |
+|---|---|---|---|
+| 3.46 °/s | 0.298 | 0.000 | 0.089 |
+| 1.70 °/s | 0.783 | 0.111 | 0.291 |
+| 1.23 °/s | 0.880 | 0.316 | 0.422 |
+| 0.50 °/s | 0.979 | 0.827 | 0.708 |
+
+`path_hold` resta a scala singola: il creep implicito a inizio addestramento è 0.0292 m/s, dove
+σ=0.03 vale 0.34 con gradiente 23.7 — nessuna zona morta.
+
+### P15 — `lateral_drift_on_turn` rimosso dalla config
+
+A −2.0 vale lo 0.003% della reward; per contare servirebbe un peso ~50× scelto a tentoni. Il
+compito lo fa già `path_hold` riformulato: a comando lineare nullo la proiezione degenera e
+accumula l'**intero** vettore velocità, cioè esattamente la sbandata durante la rotazione.
+Verificato numericamente: env in giro sul posto → `|pm| = 0.0283` = creep pieno; env in marcia
+dritta → `|pm| = 0.0200` = sola componente ortogonale. La funzione resta in `rewards.py`.
+
+### P16 — densità di campionamento dello squat-in-cammino
+
+`rel_squat_while_walking` 0.35 → **0.50** e nuovo `max_height_while_walking = 0.85`. Sopra 0.85 il
+robot cammina già bene (guadagni 0.87–1.01 in piedi): quei campioni non insegnano nulla. La
+rimappatura affine già usata per il pavimento vale ora su tutta la finestra, quindi la
+distribuzione resta uniforme (bin massimo 1.72%, cioè 1/60).
+
+Frazione di env in cammino con quota in [0.71, 0.77]: **7.5% → 20.0%** (2.7×).
+
+### Non toccato di proposito
+
+**vx indietro** (−0.144 m/s in piedi, outlier basso: R3 −0.209, R5 −0.237, R6 −0.209) e **lean a
+fondo squat** (−17.4° contro −22.2° di R6, coppia di caviglia +1.86 contro +2.74). Entrambi sono
+regressioni reali ma ho un solo seed per policy e non posso distinguerle da varianza di
+addestramento. Sono i due numeri da guardare per primi nel round 8; se il lean resta compresso su
+due round consecutivi, allora è uno dei nuovi termini a comprimerlo e va gated.
+
+### P17 — audit dei reward: `stand_still_zero_cmd` rimosso
+
+33 termini attivi. Il candidato problematico è uno solo: `stand_still_zero_cmd` non ha `asset_cfg`,
+quindi vale su **tutti e 27 i giunti**, ed è gated su `is_standing_env` — che con
+`only_when_standing=True` sono esattamente gli env che ricevono la profondità di squat.
+
+| quota | somma \|q − q_default\| | penalità/step | % di `track_base_height` (3.0) |
+|---|---|---|---|
+| 0.980 | 1.78 rad | −0.178 | 5.9% |
+| 0.761 | 5.68 | −0.568 | 18.9% |
+| 0.641 | 7.45 | −0.745 | **24.8%** |
+
+(verifica incrociata: il modello prevede un valore di episodio 0.1017, misurato 0.1046)
+
+**Non è stato rimosso perché "frena lo squat":** l'equilibrio fra questa tassa e il gradiente di
+`track_base_height` dà un offset di appena **1.3 mm**, e l'errore di inseguimento vero è ≤5 mm a
+ogni quota. È stato rimosso perché (a) **non fa il suo lavoro** — era l'anti-barcollio, ma il
+ciclo-limite della caviglia vive nell'azione, non nella posizione misurata, ed è per questo che
+esiste `ankle_action_smoothness`; (b) ogni sua parte legittima è già coperta da un termine più
+mirato (caviglie, braccia, busto, hip_roll/yaw, doppio appoggio). Resta solo un bias sulla postura
+di squat di cui non controlliamo il verso.
+
+Riferimento da difendere al prossimo run (segmento t=14, h=0.98, comando nullo): sway 0.0013 m/s,
+rollSD 0.027°, gyro 0.0009 rad/s.
+
+### P18 — `joint_deviation_hip_yaw` −0.25 → −0.15
+
+Nel round 7 la deviazione di hip_yaw è salita del 68% (0.0223 → 0.0375) proprio mentre
+`heading_hold` veniva ottimizzato (0.193 → 0.328): hip_yaw è il giunto con cui la policy sterza, e
+il penalty le rema contro. Stessa logica già nel docstring di `joint_mirror_antisym`.
+
+### Da sapere, non cambiato
+
+- **Il curriculum del terreno è un no-op**: `sub_terrains` contiene solo `flat`, quindi le 9×21
+  tessere sono identiche e promuovere un env non cambia nulla di fisico. `Curriculum/terrain_levels`
+  **non è una metrica di robustezza** — l'ho citata come tale più volte. Misura solo se gli env
+  percorrono la distanza comandata.
+- **`feet_clearance` vale esattamente 1.0 da fermo** (`foot_velocity_tanh` = 0 → `exp(0)`), cioè è
+  un secondo bonus di sopravvivenza. Con `track_base_height` (2.90) e `alive` (0.15) significa che
+  **4.03 dei 7.32 di budget positivo — il 55% — sono incassabili stando perfettamente fermi**.
+- **`ankle_torque_margin` vale lo 0.05% del budget** ed è il termine che codifica il margine del
+  baricentro sulle caviglie. Non alzato ora: la rimozione di P17 cambia già la postura di squat.
+- Cinque termini di regolarità sovrapposti (`action_rate`, `joint_vel`, `joint_acc`, `energy`,
+  `ankle_action_smoothness`) per l'8.5% del budget. Correlati fra loro, ma l'equilibrio funziona.
+- Inerti **per costruzione e corretti così**: `feet_too_near`, `undesired_contacts`,
+  `dof_pos_limits`, `squat_symmetry`. Valgono ~0 perché il vincolo è rispettato.
+
+### Miglioria del protocollo, da fare
+
+Lo scatter di una singola manovra è ±1 °/s sul rate di imbardata: differenze di quell'ordine fra
+due policy non sono risolvibili con un tratto solo. Per `standard_v2`: tratti da 15 s invece di 9,
+oppure le manovre più rumorose (vx avanti, giro sul posto) ripetute in due punti del protocollo.
+Costa ~90 s e raddoppia la potenza statistica.
+
 ## 5. Checklist edit (file → modifica)
 
 - [x] `mdp/rewards.py` — aggiunta `joint_action_rate_standing` (P1a)

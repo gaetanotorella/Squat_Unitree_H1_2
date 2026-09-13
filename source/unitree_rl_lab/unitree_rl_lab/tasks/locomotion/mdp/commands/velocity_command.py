@@ -73,6 +73,9 @@ class UniformLevelVelocityCommand(UniformVelocityCommand):
         # l'oscillazione per-passo si media a zero, la deriva no.
         self.heading_err = torch.zeros(self.num_envs, device=self.device)
         self.path_err = torch.zeros(self.num_envs, 2, device=self.device)
+        # tempo TRASCORSO in accumulo: i reward dividono per questo e penalizzano l'errore MEDIO,
+        # non quello accumulato. Vedi heading_hold/path_hold per il perche'.
+        self.drift_time = torch.zeros(self.num_envs, device=self.device)
         self._drift_steps = torch.zeros(self.num_envs, device=self.device)
         # non ci appoggiamo a self.robot della classe base: il nome dell'attributo e' cambiato fra
         # le versioni di IsaacLab, mentre scene[cfg.asset_name] e' stabile.
@@ -112,6 +115,7 @@ class UniformLevelVelocityCommand(UniformVelocityCommand):
         # la deriva si misura su una finestra di comando costante -> riparte da zero
         self.heading_err[env_ids] = 0.0
         self.path_err[env_ids] = 0.0
+        self.drift_time[env_ids] = 0.0
         self._drift_steps[env_ids] = 0.0
 
     def _update_command(self):
@@ -176,6 +180,8 @@ class UniformLevelVelocityCommand(UniformVelocityCommand):
         grace = self.cfg.drift_grace_steps
         self._drift_steps += 1.0
         active = (self._drift_steps > grace).float()
+
+        self.drift_time += dt * active
 
         wz = self._asset.data.root_ang_vel_b[:, 2]
         self.heading_err += (wz - self.vel_command_b[:, 2]) * dt * active

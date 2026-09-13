@@ -51,15 +51,18 @@ class UniformHeightCommand(CommandTerm):
             if self.cfg.rel_squat_while_walking > 0.0:
                 # Fase B PARZIALE: una frazione degli env in cammino riceve comunque una profondita'
                 walking_squat = (torch.rand_like(h) < self.cfg.rel_squat_while_walking) & ~standing
-                if self.cfg.min_height_while_walking is not None:
-                    # Pavimento di profondita' SOLO per chi cammina; gli env fermi restano liberi.
+                if self.cfg.min_height_while_walking is not None or self.cfg.max_height_while_walking is not None:
+                    # Finestra di profondita' SOLO per chi cammina; gli env fermi restano liberi.
                     # Rimappa affine invece di troncare: un clamp accumulerebbe TUTTI i campioni
-                    # sotto il pavimento su un unico valore (col range [0.60,0.98] e pavimento 0.70
-                    # sarebbe un picco del 26% esattamente a 0.70), qui invece la distribuzione
-                    # resta uniforme su [pavimento, hi].
-                    lo_w = max(lo, self.cfg.min_height_while_walking)
-                    if hi > lo:
-                        h_walk = lo_w + (h - lo) * ((hi - lo_w) / (hi - lo))
+                    # fuori finestra sugli estremi (col range [0.60,0.98] e pavimento 0.70 sarebbe
+                    # un picco del 26% esattamente a 0.70), qui la distribuzione resta uniforme
+                    # sulla finestra.
+                    lo_w = lo if self.cfg.min_height_while_walking is None else max(lo, self.cfg.min_height_while_walking)
+                    hi_w = hi if self.cfg.max_height_while_walking is None else min(hi, self.cfg.max_height_while_walking)
+                    if hi_w <= lo_w:
+                        h_walk = torch.full_like(h, lo_w)
+                    elif hi > lo:
+                        h_walk = lo_w + (h - lo) * ((hi_w - lo_w) / (hi - lo))
                     else:
                         h_walk = torch.full_like(h, lo_w)
                     h = torch.where(walking_squat, h_walk, h)
@@ -132,6 +135,19 @@ class UniformHeightCommandCfg(CommandTermCfg):
     locomotion currently yields nothing spends gradient on a task that fails anyway, instead of on
     0.76-0.85 where the recovery is realistic. Lower the floor in a later round, once walking at
     half squat is solid."""
+
+    max_height_while_walking: float | None = None
+    """Tetto di quota applicato SOLO agli env in cammino selezionati da ``rel_squat_while_walking``.
+
+    ROUND 8. Con la sola finestra inferiore (0.70) gli env che squattano camminando campionavano
+    uniformemente su [0.70, 0.98], ma sopra 0.85 il robot cammina gia' bene: quei campioni non
+    insegnano nulla. Misurato nel confronto a cinque policy (sim_logs/automatic, 2026-09-13): a
+    0.74 m il guadagno laterale e' 0.25 NONOSTANTE il comando (0.190) superi ampiamente la soglia
+    del clock del passo (0.060) -- quindi non e' piu' un problema di gate, e' che la manovra e'
+    quasi assente dal batch. Con rel=0.35 e quote uniformi su [0.70, 0.98], la frazione di campioni
+    entro +-3 cm da 0.74 era il 7.5% degli env in cammino, e di quelli un terzo ha vy dominante:
+    circa il 2.5%. Chiudendo la finestra a 0.85 e alzando rel a 0.50 la densita' nella fascia utile
+    passa dal 19% al 50% degli env in cammino, 2.6 volte tanto."""
 
     @configclass
     class Ranges:

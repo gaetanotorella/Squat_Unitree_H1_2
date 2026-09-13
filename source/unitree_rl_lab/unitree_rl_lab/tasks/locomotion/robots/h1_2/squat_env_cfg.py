@@ -52,11 +52,18 @@ class SquatCommandsCfg(CommandsCfg):
         # cosi' camminare accovacciati torna IN distribuzione senza dominare il batch. Misurato:
         # con only_when_standing=True i guadagni a mezzo squat crollano a 0.09-0.28 contro 0.6-0.77
         # in piedi; sul robot reale pero' ha camminato 7 passi a 0.863 m, quindi il margine c'e'.
-        rel_squat_while_walking=0.35,
+        # ROUND 8: 0.35 -> 0.50. A 0.74 m il guadagno laterale resta 0.25 anche dopo che P10/P11
+        # hanno portato il comando (0.190) ben sopra la soglia del clock del passo (0.060): non e'
+        # piu' il gate, e' che la manovra e' quasi assente dal batch. Vedi max_height_while_walking.
+        rel_squat_while_walking=0.50,
         # ...ma senza scendere sotto 0.70 mentre cammina: a 0.60 i guadagni misurati sono
         # -0.03/-0.01/+0.13 e lo sway triplica, quindi quegli env spenderebbero gradiente su un
         # compito che al momento non riesce. 0.60 resta pienamente disponibile da fermo.
         min_height_while_walking=0.70,
+        # ROUND 8: sopra 0.85 il robot cammina gia' bene (guadagni 0.87-1.01 in piedi), quindi
+        # quei campioni non insegnano nulla di nuovo. Chiudendo la finestra a [0.70, 0.85] la
+        # densita' nella fascia che vogliamo recuperare passa dal 19% al 50% degli env in cammino.
+        max_height_while_walking=0.85,
         velocity_command_name="base_velocity",
         debug_vis=False,
         # start with NO squat (pure standing/walking); curriculum lowers the minimum.
@@ -168,29 +175,18 @@ class SquatRewardsCfg(RewardsCfg):
             ],
         },
     )
-    # -- anti-sbandamento in rotazione: girare sul posto era la manovra piu' destabilizzante
-    # (roll -9.1 deg e vy spuria fino a 0.45 m/s con wz=-0.5 e comando lineare nullo).
-    # Era misurato INERTE nel training del 2026-09-04 (reward ferma a -0.000) perche' lo scenario
-    # "comando lineare ~0 + yaw significativo" capitava nel ~2% dei campioni: il campionatore
-    # estrae vx, vy, wz in modo indipendente. Dal round 5 c'e' rel_turn_in_place_envs=0.15, che
-    # rende lo scenario esplicito -- la condizione posta allora per riattivarlo e' soddisfatta.
-    # ROUND 7: acceso. Divisione dei compiti con path_hold: path_hold lavora sull'INTEGRALE e
-    # cattura il creep costante (il cerchio di raggio 10 cm misurato in sim2sim), questo lavora
-    # sull'ISTANTE e smorza le sbandate di picco durante la rotazione. La soglia sul comando
-    # lineare scala con la profondita' (command_gate_threshold); quella sullo yaw resta assoluta
-    # perche' misura l'entita' della manovra, non l'assenza di comando -- e con la curva sqrt il
-    # wz a fondo corsa vale 0.30 a 0.74 m e 0.25 a 0.70 m, quindi resta sopra 0.2 su tutta la
-    # fascia in cui il robot ha il permesso di camminare accovacciato.
-    lateral_drift_on_turn = RewTerm(
-        func=mdp.lateral_drift_on_turn,
-        weight=-2.0,
-        params={
-            "command_name": "base_velocity",
-            "lin_cmd_thresh": 0.1,
-            "ang_cmd_thresh": 0.2,
-            "asset_cfg": SceneEntityCfg("robot"),
-        },
-    )
+    # -- anti-sbandamento in rotazione: RIMOSSO al round 8, dopo averlo misurato.
+    # Acceso al round 7 con peso -2.0, dopo che rel_turn_in_place_envs=0.15 aveva reso lo scenario
+    # frequente (prima era inerte per campionamento, reward ferma a -0.000). Misurato: ora registra
+    # qualcosa (-0.0041) ma su 122 di reward totale e' lo 0.003%, cioe' non puo' influenzare nulla,
+    # e infatti il raggio del giro sul posto e' PEGGIORATO (0.042/0.067 m nel round 6 senza il
+    # termine, 0.136/0.118 nel round 7 con il termine), con creep 0.068+-0.013 contro 0.019+-0.005.
+    # Per contare servirebbe un peso ~50x, scelto a tentoni. Il compito lo fa gia' `path_hold`
+    # riformulato: a comando lineare nullo la sua proiezione degenera e accumula l'INTERO vettore
+    # velocita', che e' esattamente la sbandata durante la rotazione -- con una formulazione
+    # esponenziale tarata su valori misurati invece che un L2 con peso da indovinare.
+    # La funzione resta in rewards.py, non e' in config.
+
     # -- margine di stabilita': tiene il baricentro sopra le caviglie quando si sta in piedi.
     # E' il termine che mancava e che sul robot reale ha fatto la differenza (CoM 4.5 cm dietro,
     # a 4.1 cm dal bordo del tallone). Taratura: in sim la coppia da fermo e' ~14 N·m sui due
@@ -245,11 +241,36 @@ class SquatRewardsCfg(RewardsCfg):
         self.flat_orientation_l2 = None
         # ungated vertical-velocity penalty would fight the squat transition -> replaced by settle_height
         self.base_linear_velocity = None
-        # stand_still penalizza |q - q_default| sugli is_standing_env, ma quegli env ricevono anche un
-        # target di squat (posa che DEVE scostarsi dalla default) -> frena lo squat, e NON tocca il
-        # ciclo-limite (che vive nell'azione). Tenuto basso a -0.1: standing-tall e' gia' buono
-        # (sway 0.016, err altezza 0.29 cm); l'anti-barcollio e' ankle_action_smoothness.
-        self.stand_still_zero_cmd.weight = -0.1
+        # ROUND 8: RIMOSSO (era tenuto a -0.1). Il conflitto era gia' annotato qui -- penalizza
+        # |q - q_default| sugli is_standing_env, che con only_when_standing=True sono ESATTAMENTE
+        # gli env che ricevono la profondita' di squat -- ma ora e' misurato:
+        #
+        #   quota   somma|q-q_def|   penalita'/step   % di track_base_height (3.0)
+        #   0.980       1.78 rad        -0.178              5.9%
+        #   0.761       5.68            -0.568             18.9%
+        #   0.641       7.45            -0.745             24.8%
+        #
+        # (verifica incrociata: il modello prevede un valore di episodio di 0.1017, misurato 0.1046)
+        #
+        # NON lo rimuovo perche' "frena lo squat": ho calcolato il punto di equilibrio fra questa
+        # tassa e il gradiente di track_base_height ed e' un offset di appena 1.3 mm -- infatti
+        # l'errore di inseguimento vero e' <= 5 mm a ogni quota. Lo rimuovo per due ragioni solide:
+        #
+        #  1. NON FA IL SUO LAVORO. E' stato messo come anti-barcollio, ma il ciclo-limite della
+        #     caviglia vive nell'AZIONE, non nella posizione misurata: e' la ragione per cui e'
+        #     stato poi introdotto ankle_action_smoothness, che e' il termine che lo vede davvero.
+        #  2. OGNI SUA PARTE LEGITTIMA E' GIA' COPERTA da un termine piu' mirato: caviglie ->
+        #     ankle_action_smoothness; braccia -> joint_deviation_arms; busto ->
+        #     joint_deviation_torso; hip_roll/yaw -> i rispettivi joint_deviation; piedi piantati
+        #     a comando nullo -> double_support. Resta solo la componente sulla catena dello squat,
+        #     che a parita' di quota spinge la configurazione delle gambe verso le proporzioni della
+        #     posa nominale: un bias sulla POSTURA di cui non controlliamo il verso, e un candidato
+        #     plausibile (non provato) per il lean compresso del round 7.
+        #
+        # Rischio: potrebbe contribuire in silenzio alla stabilita' da fermo. Lo misura il
+        # protocollo standard_v1 al segmento t=14 (h=0.98, comando nullo): riferimento da difendere
+        # sway 0.0013 m/s, rollSD 0.027 deg, gyro 0.0009 rad/s.
+        self.stand_still_zero_cmd = None
 
 
 @configclass

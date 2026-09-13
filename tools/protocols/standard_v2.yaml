@@ -1,0 +1,83 @@
+# ============================================================================================
+# PROTOCOLLO DI TEST STANDARD v2 — H1_2 squat
+#
+# Identico a v1 nelle manovre, ma corregge un difetto del banco scoperto il 2026-09-13 rifacendo
+# i conti sui cinque run di confronto: il joystick scriptato integra la rampa di quota contro il
+# tempo di simulazione, mentre il controller fa `squat_target -= 0.15*step_dt` una volta per passo
+# di policy con step_dt nominale 0.02 — e il suo ciclo gira a ~46 Hz, quindi sotto-integra dell'8%.
+# L'errore si accumulava a ogni rampa: chiedendo 0.85 / 0.74 / 0.66 / 0.60 il controller riceveva
+# 0.860 / 0.761 / 0.692 / 0.641. Il "fondo squat a 0.60" era in realtà a 0.641.
+#
+# Due correzioni, entrambe qui dentro:
+#   1. `overhold`: agli estremi (0.60 e 0.98) il tasto resta premuto oltre il necessario. Lì il
+#      controller CLAMPA `squat_target`, quindi finisce esattamente sul limite.
+#   2. Ogni quota intermedia si raggiunge ripartendo da 0.98, non concatenando le discese. Con
+#      l'overhold il ritorno a 0.98 è esatto, quindi l'errore non si accumula più: resta quello di
+#      una sola rampa (0.8–2 cm), ed è comunque riportato nella colonna "h ctrl" del report.
+#
+# v1 NON è stata toccata: i cinque run di confronto del 2026-09-13 restano validi fra loro.
+# `compare_runs.py` rifiuta di confrontare protocolli diversi, quindi i due insiemi non si mescolano.
+#
+# Semantica: ogni voce ha un istante `t` (tempo di SIMULAZIONE, s) e uno stato APPICCICOSO —
+# vx/vy/wz/height valgono finché non li cambia una voce successiva. `do` è invece un impulso.
+# vx,vy in m/s; wz in rad/s; height in m. Ampiezze a fondo corsa dei range di training
+# (vx ∈ [-0.3, 1.0], vy ∈ [-0.3, 0.3], wz ∈ [-0.5, 0.5]), PRIMA dello scaling per profondità.
+# ============================================================================================
+name: standard_v2
+nominal_height: 0.98
+deepest_height: 0.60
+band_release_at: 12.0
+overhold: 1.5
+stop_at: 282.0
+
+timeline:
+  # ---- avvio ---------------------------------------------------------------------------
+  - {t:   2.0, do: fixstand}
+  - {t:   8.0, do: rl}
+  - {t:  14.0, vx: 0.0, vy: 0.0, wz: 0.0}
+
+  # ---- A) stazione eretta, comando nullo: riferimento di sway/lean ----------------------
+  - {t:  14.0}
+
+  # ---- B) stazione eretta, i sei assi ---------------------------------------------------
+  - {t:  24.0, vx:  1.0}
+  - {t:  33.0, vx:  0.0}
+  - {t:  37.0, vx: -0.3}
+  - {t:  46.0, vx:  0.0}
+  - {t:  50.0, vy:  0.3}
+  - {t:  59.0, vy:  0.0}
+  - {t:  63.0, vy: -0.3}
+  - {t:  72.0, vy:  0.0}
+  - {t:  76.0, wz:  0.5}
+  - {t:  85.0, wz:  0.0}
+  - {t:  89.0, wz: -0.5}
+  - {t:  98.0, wz:  0.0}
+
+  # ---- C) scala di quote da fermo, ogni volta RIPARTENDO da 0.98 ------------------------
+  - {t: 102.0, height: 0.85}
+  - {t: 110.0, height: 0.98}
+  - {t: 116.0, height: 0.74}
+  - {t: 124.0, height: 0.98}
+  - {t: 130.0, height: 0.66}
+  - {t: 138.0, height: 0.98}
+  - {t: 144.0, height: 0.60}    # 24 s a fondo corsa: la tenuta lunga da difendere
+  - {t: 168.0, height: 0.98}
+
+  # ---- D) mezzo squat 0.74 m, gli stessi sei assi ---------------------------------------
+  - {t: 176.0, height: 0.74}
+  - {t: 182.0, vx:  1.0}
+  - {t: 191.0, vx:  0.0}
+  - {t: 195.0, vx: -0.3}
+  - {t: 204.0, vx:  0.0}
+  - {t: 208.0, vy:  0.3}
+  - {t: 217.0, vy:  0.0}
+  - {t: 221.0, vy: -0.3}
+  - {t: 230.0, vy:  0.0}
+  - {t: 234.0, wz:  0.5}
+  - {t: 243.0, wz:  0.0}
+  - {t: 247.0, wz: -0.5}
+  - {t: 256.0, wz:  0.0}
+
+  # ---- E) ritorno in piedi e fermo finale ------------------------------------------------
+  - {t: 260.0, height: 0.98}
+  - {t: 270.0}

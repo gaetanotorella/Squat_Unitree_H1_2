@@ -46,7 +46,38 @@ chiude, e produce metriche e grafici.
 Confronta segmento per segmento e chiude con l'elenco dei **peggioramenti oltre soglia**. Si
 rifiuta di confrontare run di protocolli diversi.
 
-## Il protocollo
+## I protocolli
+
+`protocols/standard_v2.yaml` è quello da usare. `standard_v1.yaml` è conservato **immutato** perché
+i cinque run di confronto del 2026-09-13 (`sim_logs/automatic/`) lo usano, e `compare_runs.py`
+rifiuta di confrontare protocolli diversi.
+
+**Perché esiste v2 — un difetto del banco, non del robot.** Il joystick scriptato integra la rampa
+di quota contro il tempo di simulazione; il controller fa `squat_target -= 0.15*step_dt` una volta
+per passo di policy con `step_dt` nominale 0.02, e il suo ciclo gira a ~46 Hz: sotto-integra
+dell'8%, e l'errore si accumula a ogni rampa.
+
+| chiesta | ricevuta dal controller | scarto |
+|---|---|---|
+| 0.85 | 0.860 | +0.010 |
+| 0.74 | 0.761 | +0.021 |
+| 0.66 | 0.692 | +0.032 |
+| 0.60 | **0.641** | **+0.041** |
+
+Identico in tutti i run, quindi il confronto fra policy resta valido — ma il "fondo squat a 0.60"
+era a 0.641, e l'errore di quota che sembrava cedimento del robot (+4 cm) era quasi tutto
+disallineamento. L'errore di inseguimento vero è ≤ 5 mm.
+
+v2 corregge con due mosse: `overhold: 1.5` (agli estremi il tasto resta premuto oltre il
+necessario — lì il controller **clampa**, quindi finisce esattamente sul limite) e ogni quota
+intermedia raggiunta ripartendo da 0.98 invece di concatenare le discese, così l'errore non si
+accumula più.
+
+Da allora `report_metrics.py` misura `h_err` contro il **target loggato dal controller**
+(`base_height_command_0`, già in `obs.csv`), non contro il valore del protocollo, e riporta
+entrambe le quote nel report (colonne `h prot` e `h ctrl`).
+
+## Struttura del protocollo
 
 `protocols/standard_v1.yaml`. Stato **appiccicoso**: `vx/vy/wz/height` valgono finché non li
 cambia una voce successiva; `do` è invece un impulso. Le ampiezze sono a fondo corsa dei range di
@@ -66,7 +97,10 @@ lo impone.
 - il **real-time factor** esce da [0.97, 1.03]. Il joystick scriptato integra la quota sul tempo
   di simulazione, il controller sul suo orologio a 50 Hz: se MuJoCo rallenta i due divergono e le
   quote comandate non sono più quelle scritte nel protocollo;
-- una **quota comandata** differisce da quella misurata di oltre 5 cm.
+- l'**inseguimento di quota** del robot supera 1 cm rispetto al target del controller (era 5 cm
+  contro il valore del protocollo: a quella soglia uno scarto di 4.1 cm passava in silenzio);
+- il **target del controller** differisce da quello chiesto dal protocollo di oltre 1 cm. Non
+  invalida il confronto fra policy, ma va visto; con v2 resta sotto il centimetro.
 
 ## Vincoli da non rompere
 
