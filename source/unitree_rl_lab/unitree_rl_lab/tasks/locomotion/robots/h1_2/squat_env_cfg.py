@@ -49,21 +49,20 @@ class SquatCommandsCfg(CommandsCfg):
         # Il flag resta True e la Fase B passa dalla frazione qui sotto.
         only_when_standing=True,
         # P4: Fase B PARZIALE. Il 35% degli env in cammino riceve comunque una profondita' di squat,
-        # cosi' camminare accovacciati torna IN distribuzione senza dominare il batch. Misurato:
-        # con only_when_standing=True i guadagni a mezzo squat crollano a 0.09-0.28 contro 0.6-0.77
-        # in piedi; sul robot reale pero' ha camminato 7 passi a 0.863 m, quindi il margine c'e'.
-        # ROUND 8: 0.35 -> 0.50. A 0.74 m il guadagno laterale resta 0.25 anche dopo che P10/P11
-        # hanno portato il comando (0.190) ben sopra la soglia del clock del passo (0.060): non e'
-        # piu' il gate, e' che la manovra e' quasi assente dal batch. Vedi max_height_while_walking.
-        rel_squat_while_walking=0.50,
+        # cosi' camminare accovacciati torna IN distribuzione senza dominare il batch. E' la
+        # modifica con l'evidenza piu' netta di tutte (confronto a sei policy sullo stesso
+        # protocollo, comando pieno a 0.75 m): da R4 (senza) a R5 (con) vx avanti 0.50 -> 0.94,
+        # vx indietro 0.03 -> 0.16, vy 0.02 -> 0.11, wz 0.16 -> 0.27.
+        # ROUND 9: torna a 0.35 dal 0.50 del round 8 (quel round e' collassato per altre ragioni e
+        # il 0.50 non e' separabile dal collasso; 0.35 e' il valore misurato).
+        rel_squat_while_walking=0.35,
         # ...ma senza scendere sotto 0.70 mentre cammina: a 0.60 i guadagni misurati sono
         # -0.03/-0.01/+0.13 e lo sway triplica, quindi quegli env spenderebbero gradiente su un
         # compito che al momento non riesce. 0.60 resta pienamente disponibile da fermo.
+        # NB: questo pavimento e' anche il CUTOFF del deploy (export_deploy_cfg lo scrive in
+        # deploy.yaml come cutoff_height): sotto questa quota il controller azzera il comando di
+        # velocita', cosi' il deploy non chiede mai una manovra che il training non ha mai visto.
         min_height_while_walking=0.70,
-        # ROUND 8: sopra 0.85 il robot cammina gia' bene (guadagni 0.87-1.01 in piedi), quindi
-        # quei campioni non insegnano nulla di nuovo. Chiudendo la finestra a [0.70, 0.85] la
-        # densita' nella fascia che vogliamo recuperare passa dal 19% al 50% degli env in cammino.
-        max_height_while_walking=0.85,
         velocity_command_name="base_velocity",
         debug_vis=False,
         # start with NO squat (pure standing/walking); curriculum lowers the minimum.
@@ -175,17 +174,8 @@ class SquatRewardsCfg(RewardsCfg):
             ],
         },
     )
-    # -- anti-sbandamento in rotazione: RIMOSSO al round 8, dopo averlo misurato.
-    # Acceso al round 7 con peso -2.0, dopo che rel_turn_in_place_envs=0.15 aveva reso lo scenario
-    # frequente (prima era inerte per campionamento, reward ferma a -0.000). Misurato: ora registra
-    # qualcosa (-0.0041) ma su 122 di reward totale e' lo 0.003%, cioe' non puo' influenzare nulla,
-    # e infatti il raggio del giro sul posto e' PEGGIORATO (0.042/0.067 m nel round 6 senza il
-    # termine, 0.136/0.118 nel round 7 con il termine), con creep 0.068+-0.013 contro 0.019+-0.005.
-    # Per contare servirebbe un peso ~50x, scelto a tentoni. Il compito lo fa gia' `path_hold`
-    # riformulato: a comando lineare nullo la sua proiezione degenera e accumula l'INTERO vettore
-    # velocita', che e' esattamente la sbandata durante la rotazione -- con una formulazione
-    # esponenziale tarata su valori misurati invece che un L2 con peso da indovinare.
-    # La funzione resta in rewards.py, non e' in config.
+    # -- lateral_drift_on_turn: NON in config. Provato nel round 7 a -2.0: 0.003% della reward,
+    # inerte, con il raggio del giro sul posto peggiorato (0.04 -> 0.13 m). Resta in rewards.py.
 
     # -- margine di stabilita': tiene il baricentro sopra le caviglie quando si sta in piedi.
     # E' il termine che mancava e che sul robot reale ha fatto la differenza (CoM 4.5 cm dietro,
@@ -241,42 +231,29 @@ class SquatRewardsCfg(RewardsCfg):
         self.flat_orientation_l2 = None
         # ungated vertical-velocity penalty would fight the squat transition -> replaced by settle_height
         self.base_linear_velocity = None
-        # ROUND 8: RIMOSSO (era tenuto a -0.1). Il conflitto era gia' annotato qui -- penalizza
-        # |q - q_default| sugli is_standing_env, che con only_when_standing=True sono ESATTAMENTE
-        # gli env che ricevono la profondita' di squat -- ma ora e' misurato:
-        #
-        #   quota   somma|q-q_def|   penalita'/step   % di track_base_height (3.0)
-        #   0.980       1.78 rad        -0.178              5.9%
-        #   0.761       5.68            -0.568             18.9%
-        #   0.641       7.45            -0.745             24.8%
-        #
-        # (verifica incrociata: il modello prevede un valore di episodio di 0.1017, misurato 0.1046)
-        #
-        # NON lo rimuovo perche' "frena lo squat": ho calcolato il punto di equilibrio fra questa
-        # tassa e il gradiente di track_base_height ed e' un offset di appena 1.3 mm -- infatti
-        # l'errore di inseguimento vero e' <= 5 mm a ogni quota. Lo rimuovo per due ragioni solide:
-        #
-        #  1. NON FA IL SUO LAVORO. E' stato messo come anti-barcollio, ma il ciclo-limite della
-        #     caviglia vive nell'AZIONE, non nella posizione misurata: e' la ragione per cui e'
-        #     stato poi introdotto ankle_action_smoothness, che e' il termine che lo vede davvero.
-        #  2. OGNI SUA PARTE LEGITTIMA E' GIA' COPERTA da un termine piu' mirato: caviglie ->
-        #     ankle_action_smoothness; braccia -> joint_deviation_arms; busto ->
-        #     joint_deviation_torso; hip_roll/yaw -> i rispettivi joint_deviation; piedi piantati
-        #     a comando nullo -> double_support. Resta solo la componente sulla catena dello squat,
-        #     che a parita' di quota spinge la configurazione delle gambe verso le proporzioni della
-        #     posa nominale: un bias sulla POSTURA di cui non controlliamo il verso, e un candidato
-        #     plausibile (non provato) per il lean compresso del round 7.
-        #
-        # Rischio: potrebbe contribuire in silenzio alla stabilita' da fermo. Lo misura il
-        # protocollo standard_v1 al segmento t=14 (h=0.98, comando nullo): riferimento da difendere
-        # sway 0.0013 m/s, rollSD 0.027 deg, gyro 0.0009 rad/s.
-        self.stand_still_zero_cmd = None
+        # stand_still_zero_cmd a -0.1: TENUTO, e ora si sa perche'. Penalizza |q - q_default| su
+        # tutti i 27 giunti degli is_standing_env, che sono anche gli env che squattano: e' una
+        # tassa proporzionale alla profondita' (-0.18/step a 0.98, -0.75 a 0.64). Non frena lo
+        # squat (l'equilibrio col gradiente di track_base_height e' un offset di 1.3 mm) e non vede
+        # il ciclo-limite della caviglia (che vive nell'azione). Nel round 8 e' stato RIMOSSO per
+        # questo, e il risultato ha dimostrato il suo vero ruolo: e' l'ANCORA DELLA POSTURA in
+        # piedi. Senza, la policy ha portato il baricentro sull'asse della caviglia (pitch -4.5 deg,
+        # coppia di caviglia da +7.8 a -0.8 N.m), la caviglia scarica e' entrata in un ciclo-limite
+        # a 1.5 Hz (azione std x44, coppia +-16 N.m, sway da fermo x36). Con la caviglia precaricata
+        # dalla postura nominale il chatter non parte. A -0.1 il costo sullo squat e' trascurabile.
+        self.stand_still_zero_cmd.weight = -0.1
 
 
 @configclass
 class SquatCurriculumCfg(CurriculumCfg):
-    """Velocity/terrain curricula (inherited) + squat-depth curriculum."""
+    """Velocity curriculum (inherited) + squat-depth curriculum. Terrain curriculum disabled."""
 
+    # ROUND 9: il curriculum del terreno e' un NO-OP e viene spento. L'unico sotto-terreno in
+    # config e' `flat`, quindi le 9x21 tessere sono identiche e promuovere o retrocedere un env non
+    # cambia nulla di fisico -- `Curriculum/terrain_levels` misurava solo se gli env percorrevano
+    # la distanza comandata, non la robustezza al terreno. Il __post_init__ della base mette
+    # terrain_generator.curriculum = False quando questo termine e' None. Il terreno resta lo stesso.
+    terrain_levels = None
     height_cmd_levels = CurrTerm(func=mdp.height_cmd_levels)
 
 

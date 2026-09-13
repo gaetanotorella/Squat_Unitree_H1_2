@@ -65,6 +65,18 @@ def export_deploy_cfg(env: ManagerBasedRLEnv, log_dir):
                 "threshold_min_scale": float(getattr(bv, "threshold_min_scale", 0.2)),
             }
 
+        # ROUND 9: CUTOFF invece dello scaling. In training gli env che camminano non scendono mai
+        # sotto min_height_while_walking (0.70): sotto quella quota la policy non ha MAI visto un
+        # comando di velocita' non nullo. Il controller azzera quindi il comando sotto la stessa
+        # quota, cosi' il deploy resta dentro la distribuzione di training invece di chiedere una
+        # manovra mai addestrata (misurato in R5 a 0.60 con comando pieno: sway 0.05-0.13, roll
+        # -4.9 deg). Sopra il cutoff il comando e' pieno, come in training. Unica fonte di verita':
+        # il pavimento del command term; assente -> nessun cutoff.
+        if hasattr(env.cfg.commands, "base_height"):
+            floor = getattr(env.cfg.commands.base_height, "min_height_while_walking", None)
+            if floor is not None:
+                cfg["commands"]["base_velocity"]["cutoff_height"] = float(floor)
+
     if hasattr(env.cfg.commands, "base_height"):  # squat task: base-height command
         cfg["commands"]["base_height"] = {}
         if hasattr(env.cfg.commands.base_height, "limit_ranges"):

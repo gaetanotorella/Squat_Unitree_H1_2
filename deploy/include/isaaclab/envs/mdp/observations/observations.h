@@ -130,9 +130,20 @@ REGISTER_OBSERVATION(last_action)
 // appena sopra la soglia 0.1 del clock del passo -- e sotto 0.713 m sempre sotto. Misurato a
 // 0.74 m: guadagno 0.79 in avanti contro 0.09 indietro, 0.13-0.23 laterale, 0.35-0.40 in
 // imbardata. Con esponente 0.5 il fattore a 0.74 diventa 0.60. Estremi invariati.
+//
+// ROUND 9: CUTOFF, non scaling. Lo scaling e' stato tolto dal training (riduceva per costruzione
+// la mobilita' a mezzo squat: vx avanti a 0.75 m da 0.94 a comando pieno a 0.33/0.52 scalato). Al
+// suo posto `cutoff_height`, esportato da export_deploy_cfg a partire da min_height_while_walking
+// del training: sotto quella quota la policy NON ha mai visto un comando di velocita' non nullo
+// (gli env che camminano non scendono sotto 0.70), quindi il controller lo azzera e il deploy resta
+// dentro la distribuzione di training. Sopra, comando pieno come in training. Vale per entrambi i
+// chiamanti (velocity_commands e gait_phase): con comando 0 il clock del passo resta congelato.
+// Se manca la chiave -- policy senza pavimento -- nessun cutoff.
 inline float squat_speed_scale(isaaclab::ManagerBasedRLEnv * env)
 {
     const auto cmds = env->cfg["commands"]["base_velocity"];
+    if (cmds["cutoff_height"] && env->squat_target < cmds["cutoff_height"].as<float>())
+        return 0.0f;
     if (!cmds["speed_scale"])
         return 1.0f;
 

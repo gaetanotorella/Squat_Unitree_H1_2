@@ -643,6 +643,83 @@ due policy non sono risolvibili con un tratto solo. Per `standard_v2`: tratti da
 oppure le manovre più rumorose (vx avanti, giro sul posto) ripetute in due punti del protocollo.
 Costa ~90 s e raddoppia la potenza statistica.
 
+## 4-octies. ROUND 9 — ripartenza pulita da R4, solo con ciò che ha evidenza
+
+### Perché
+
+Il round 8 (`2026-09-13_16-15-47`) è collassato sullo stesso protocollo: locomozione laterale e
+rotatoria a zero (vy 0.29 → 0.01, wz 0.50 → 0.05), e a 0.98 m un ciclo-limite della caviglia a
+1.5 Hz (azione std ×44, coppia ±16 N·m, sway da fermo ×36). Due cause distinte:
+
+1. **`stand_still_zero_cmd` rimosso** (P17) → la postura in piedi non è più ancorata → il
+   baricentro va sull'asse della caviglia (pitch −4.5°, coppia +7.8 → −0.8 N·m) → caviglia scarica
+   → chatter. La mia diagnosi di P17 era letteralmente vera ("non vede il ciclo-limite") e
+   sostanzialmente sbagliata: il termine era l'**àncora della postura**, e quella teneva la
+   caviglia precaricata. A quote di squat la caviglia è comunque carica e il fenomeno non compare.
+2. **`path_hold` a peso 1.0** penalizza lo sway che il passo laterale/rotatorio produce
+   inevitabilmente: per vy=0.3 la perdita (0.97) supera il guadagno di tracking (0.68), per vx=1.0
+   no (0.47 contro 1.48). La policy ha smesso di fare il passo per tutto ciò che non è marcia in
+   avanti. In training: `gait` −38%, `double_support` +76%.
+
+Sei policy confrontate sullo stesso protocollo (`sim_logs/automatic/`, `standard_v1`):
+
+| | R4 | R5 | R6 | R7 | R8 |
+|---|---|---|---|---|---|
+| wz in piedi (cmd 0.5) | 0.36 | 0.38 | 0.44 | **0.50** | 0.05 |
+| vy in piedi (cmd 0.3) | 0.17/0.20 | 0.22/0.25 | 0.27/0.27 | 0.22/**0.29** | 0.01 |
+| vx+ a 0.75 m | 0.50 | **0.94** | 0.33* | 0.52* | 0.47* |
+| wz a 0.75 m | 0.16 | **0.27** | 0.10* | 0.24* | 0.00 |
+| rollSD camminata [°] | **1.44** | 2.11 | 2.00 | 2.32 | — |
+| sway fermo 0.98 | 0.002 | 0.001 | 0.001 | 0.001 | **0.046** |
+| pitch fondo squat [°] | −17.5 | −20.5 | **−22.2** | −17.4 | −25.7 |
+| coppia caviglia fondo [N·m] | −0.55 | −0.14 | **+2.74** | +1.86 | +1.87 |
+| deriva yaw \|ω\| [°/s] | 1.73 | 3.60 | **1.49** | 1.20 | — |
+
+\* comando scalato dal controller; R3–R5 ricevono il comando pieno.
+
+### Verdetti
+
+**Tenuto** — CoM su tutti i link + `flat_orientation_asym` (validati sul reale); P0 gate di
+`ankle_torque_margin` (test con CoM spostato); P1 fine tracking + P2 hip separati + P3 turn-in-place
+(vy/wz +30–40% in tre round; costo rollSD +0.6°, scelta esplicita di tenerli); P4+P7 squat-in-cammino
+0.35 con pavimento 0.70 (mobilità a 0.75 m da 2× a 5×, l'evidenza più netta di tutte); P6 deadband
+0.42; `stand_still_zero_cmd` a −0.1 (àncora della postura); `action_rate` −0.05.
+
+**Scartato** — scaling della velocità con la quota (riduce per costruzione la mobilità a mezzo
+squat, e ha trascinato P10/P11); `heading_hold`, `path_hold`, `lateral_drift_on_turn`; squat-in-cammino
+0.50/[0.70, 0.85]; hip_yaw −0.15; curriculum del terreno (no-op: solo `flat`).
+
+**Il config risultante è R5 con `action_rate` a −0.05 — cioè R6 senza lo scaling.** Mai addestrato.
+
+### P19 — cutoff a 0.70 m nel deploy, al posto dello scaling
+
+In training gli env che camminano non scendono mai sotto `min_height_while_walking = 0.70`: sotto
+quella quota la policy non ha **mai** visto un comando di velocità non nullo. `export_deploy_cfg`
+esporta il pavimento come `cutoff_height` e `squat_speed_scale()` in `observations.h` restituisce 0
+sotto quella quota, 1 sopra — per entrambi i chiamanti (`velocity_commands` e `gait_phase`). Non è
+uno scaling: è una guardia che tiene il deploy dentro la distribuzione di training. Verificato con
+un harness sulle tre generazioni di `deploy.yaml`: policy R4/R5 (nessuna chiave) → 1.0 ovunque,
+soglia 0.1; round 9 → 0 sotto 0.70, 1 sopra; R7 → il suo sqrt intatto.
+
+La macchineria di scaling e degli accumulatori di deriva resta nel codice ma spenta
+(`speed_scale_zero_height=None`): scale = 1, soglia 0.1, nessuna chiave `speed_scale` in deploy.yaml.
+Equivalente a R4/R5 su entrambi i lati. Pulizia del codice: dopo la validazione.
+
+### Verifica prima del lancio
+
+`diff params/env.yaml` del nuovo run contro `2026-09-07_20-47-22` (R5) deve mostrare solo
+`action_rate −0.035 → −0.05`, `terrain_levels` assente, e i campi inerti del command term
+(`speed_scale_zero_height: null`, `drift_grace_steps`, ecc.). Il `deploy.yaml` deve contenere
+`cutoff_height: 0.7` e nessuna chiave `speed_scale`.
+
+### Obiettivi al protocollo (`standard_v1` per il confronto con i sei run, `standard_v2` come riferimento)
+
+- fermo a 0.98: sway ≤ 0.002, gyro ≤ 0.002, coppia caviglia > +3 N·m (niente ciclo-limite)
+- camminata in piedi: rollSD ≤ 2.0°, vy ≥ 0.22, wz ≥ 0.42
+- fondo squat: rollSD ≤ 0.03°, coppia ≥ 0, pitch ≤ −20°
+- mezzo squat a comando pieno: vx+ ≥ 0.85, vy ≥ 0.10, wz ≥ 0.25 (livello R5), sway ≤ 0.10
+- deriva yaw |ω| ≤ 1.7 °/s (livello R6)
+
 ## 5. Checklist edit (file → modifica)
 
 - [x] `mdp/rewards.py` — aggiunta `joint_action_rate_standing` (P1a)

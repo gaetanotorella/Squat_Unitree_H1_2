@@ -223,22 +223,17 @@ class CommandsCfg:
         # uno scenario allenato esplicitamente -- ed e' anche la condizione che rende finalmente
         # non-inerte turn_lateral_drift, se lo riattiveremo.
         rel_turn_in_place_envs=0.15,
-        # P8: ampiezza del comando proporzionale alla profondita'. 1.0 sopra 0.95 m, 0 sotto 0.62.
-        # Vale 0.50 a 0.785 e 0.24 a 0.70, in linea con cio' che il robot dimostra di saper fare.
-        # Completa P7: quello impediva agli env in cammino di scendere sotto 0.70, questo impedisce
-        # di chiedere a 0.70 la stessa velocita' che si chiede a 0.98. Applicato IDENTICO nel
-        # controller C++ (velocity_commands e gait_phase) tramite deploy.yaml.
-        speed_scale_zero_height=0.62,
-        speed_scale_full_height=0.95,
-        # ROUND 7: curva NON LINEARE. Con l'esponente 1.0 il fattore a 0.74 m valeva 0.364, quindi
-        # vy e vx-indietro a fondo corsa scendevano a 0.109 -- appena sopra la soglia 0.1 del clock
-        # del passo, e sotto 0.713 m sempre sotto. Misurato in sim2sim (2026-09-10) a 0.74 m:
-        # guadagno 0.79 in avanti (comando 0.36, sopra soglia grazie al range asimmetrico
-        # [-0.3, 1.0]) contro 0.09 indietro, 0.13-0.23 laterale, 0.35-0.40 in imbardata, con la
-        # velocita' del ginocchio a 0.015 rad/s contro 0.045 in piedi: non fa il passo.
-        # Con 0.5: 0.74 -> 0.60 (vy pieno 0.18, wz 0.30), 0.85 -> 0.84, 0.70 -> 0.49.
-        # Estremi invariati: 0.62 -> 0 esatto, 0.95 -> 1 esatto.
-        speed_scale_exponent=0.5,
+        # ROUND 9: scaling della velocita' con la quota SPENTO (None e' l'interruttore previsto).
+        # Era P8 (round 6, lineare) poi sqrt (round 7). Misurato sul confronto a sei policy con lo
+        # stesso protocollo: riduce per costruzione la mobilita' a mezzo squat -- vx avanti a 0.75 m
+        # 0.94 (R5, comando pieno) -> 0.33 (R6) -> 0.52 (R7) -- e ha richiesto a cascata soglie
+        # proporzionali e curve non lineari per non spegnere il passo. Al suo posto un CUTOFF a
+        # 0.70 m solo nel deploy (vedi export_deploy_cfg / observations.h): in training nessun env
+        # cammina sotto min_height_while_walking=0.70, quindi sotto quella quota la policy non ha
+        # mai visto un comando, e sopra lo riceve pieno come in training. Con None la macchineria
+        # in velocity_command.py resta inerte: scale = 1, soglia del clock = 0.1, deploy.yaml senza
+        # chiave speed_scale -> controller C++ a 1.0. Identico a R4/R5 su entrambi i lati.
+        speed_scale_zero_height=None,
         rel_heading_envs=1.0,
         heading_command=False,
         debug_vis=True,
@@ -350,64 +345,15 @@ class RewardsCfg:
         params={"command_name": "base_velocity", "std": 0.25},
     )
 
-    # -- ROUND 7: RETTILINEITA' -----------------------------------------------------------------
-    # Misurato in sim2sim (sim_2026-09-10_18-08-39): su percorsi di 2.3-3.0 m il robot esce dalla
-    # retta di 15-52 cm. Due cause indipendenti, entrambe INVISIBILI ai termini di tracking sopra:
-    #
-    #   A) deriva di imbardata non comandata, omega ~= +0.72 - 4.45*vx + 6.52*vy [deg/s]
-    #   B) creep costante nel body frame di (+0.02 avanti, -0.02 a destra) m/s, presente in ogni
-    #      modalita' di cammino e assente da fermo -> durante un comando di yaw puro il bacino
-    #      percorre un cerchio di raggio |v|/omega ~ 10 cm invece di girare sul posto.
-    #
-    # Con std 0.5/0.25 una deriva di 2 deg/s mette in palio 0.0146/step e un creep di 0.02 m/s ne
-    # mette 0.0048, su ~115 di reward totale: sono sotto la risoluzione del reward, non e' una
-    # questione di peso. E stringere lo std sul RATE sarebbe controproducente, perche' le due
-    # semifasi del passo differiscono gia' di 2-7 deg/s: si punirebbe l'andatura sana. Per questo
-    # i due termini qui sotto lavorano sull'errore INTEGRATO sulla finestra di comando (10 s),
-    # dove l'oscillazione per-passo si media a zero e resta solo la deriva.
-    #
-    # ROUND 8: entrambi riformulati sull'errore MEDIO (err/tempo) invece che accumulato, e
-    # path_hold portato da 0.3 a 1.0. Misurato sul confronto a cinque policy con lo stesso
-    # protocollo (sim_logs/automatic, 2026-09-13):
-    #   - heading_hold ha funzionato A META': accoppiamenti collassati (vy +6.21 -> -1.07,
-    #     vx -1.54 -> -0.17) ma |omega| solo da 1.70+-0.18 a 1.23+-0.22 deg/s. Colpa della
-    #     saturazione dell'integrale: a 1.7 deg/s su 9.5 s l'errore e' 0.28 rad contro std 0.25.
-    #   - path_hold e' stato CONTROPRODUCENTE: creep laterale da 0.0165+-0.0014 (round 6, senza
-    #     il termine) a 0.0309+-0.0033 m/s, 4 sigma di peggioramento. E in addestramento il suo
-    #     valore e' CALATO (0.183 -> 0.168): a peso 0.3 la policy lo ha semplicemente barattato.
-    # La media non satura, non dipende dalla lunghezza della finestra, e gli std sono ora in
-    # unita' fisiche dirette (rad/s e m/s) tarate sui valori misurati.
-    # heading_hold e' a DUE SCALE, come track_lin_vel/track_ang_vel dopo P1, e per la stessa
-    # ragione. Invertendo il valore del termine nel round 7 (0.1933 a iterazione 1000, peso 0.5)
-    # la deriva implicita a inizio addestramento e' 3.46 deg/s: a std 0.02 il reward li' vale
-    # 0.000 con gradiente 0.0, cioe' una zona morta che sprecherebbe meta' del round. La campana
-    # larga tiene vivo il gradiente da 3.5 deg/s in giu' (0.298 con gradiente 10.9), quella
-    # stretta da' la precisione sotto 1.5 deg/s dove la larga e' ormai piatta.
-    #   deriva   larga(0.06)   stretta(0.02)   totale in palio
-    #   3.46       0.298          0.000            0.089
-    #   1.70       0.783          0.111            0.291
-    #   1.23       0.880          0.316            0.422
-    #   0.50       0.979          0.827            0.708
-    heading_hold = RewTerm(
-        func=mdp.heading_hold,
-        weight=0.3,
-        params={"command_name": "base_velocity", "std": 0.06},
-    )
-    heading_hold_fine = RewTerm(
-        func=mdp.heading_hold,
-        weight=0.5,
-        params={"command_name": "base_velocity", "std": 0.02},
-    )
-    # path_hold resta a scala singola: invertendo il suo valore nel round 7 il creep implicito e'
-    # 0.0292 m/s a iterazione 1000 e 0.0324 a fine (contro 0.0309+-0.0033 misurati in deploy --
-    # buona verifica incrociata), e a std 0.03 quel livello vale 0.34 con gradiente 23.7. Nessuna
-    # zona morta. Da notare che il creep e' PEGGIORATO durante l'addestramento (0.0292 -> 0.0324):
-    # a peso 0.3 il termine veniva barattato, da cui il passaggio a 1.0.
-    path_hold = RewTerm(
-        func=mdp.path_hold,
-        weight=1.0,
-        params={"command_name": "base_velocity", "std": 0.03},
-    )
+    # -- ROUND 9: heading_hold / path_hold RIMOSSI (le funzioni restano in rewards.py) --------------
+    # Provati nei round 7 (forma a integrale) e 8 (forma a media, path_hold a peso 1.0). Sullo
+    # stesso protocollo a sei policy: R7 ha ridotto la STRUTTURA della deriva di imbardata
+    # (accoppiamento vy da +6.21 a -1.07 deg/s per m/s) ma non il modulo (1.49 -> 1.20 deg/s,
+    # 1.7 sigma) e ha peggiorato la rettilineita' (|dev| 0.11 -> 0.46 m); R8 ha fatto collassare
+    # la locomozione laterale e rotatoria (vy 0.29 -> 0.01, wz 0.50 -> 0.05 m/s e rad/s) perche'
+    # path_hold penalizza lo sway che il passo laterale produce inevitabilmente, e a peso 1.0 la
+    # perdita supera il guadagno di tracking di vy (0.97 contro 0.68 per step). La deriva di
+    # imbardata (1.2-1.7 deg/s) resta un problema aperto, ma NON e' risolvibile con questi termini.
 
     alive = RewTerm(func=mdp.is_alive, weight=0.15)
 
@@ -473,14 +419,12 @@ class RewardsCfg:
         weight=-1.0,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_hip_roll_joint"])},
     )
-    # ROUND 8: -0.25 -> -0.15. hip_yaw e' il giunto con cui la policy sterza, ed e' esattamente
-    # cio' che heading_hold le chiede di fare: nel round 7 la deviazione di hip_yaw e' salita del
-    # 68% (0.0223 -> 0.0375) proprio mentre heading_hold veniva ottimizzato (0.193 -> 0.328). I due
-    # termini si remano contro. Stessa logica gia' scritta nel docstring di joint_mirror_antisym:
-    # "Do NOT apply to hip_yaw: turning legitimately needs L/R yaw asymmetry".
+    # ROUND 9: torna a -0.25 (P2). Il -0.15 del round 8 era motivato dal conflitto con
+    # heading_hold, che non c'e' piu'; -0.25 e' il valore dei tre round (5, 6, 7) in cui il
+    # guadagno di imbardata e' salito da 0.36 a 0.50.
     joint_deviation_hip_yaw = RewTerm(
         func=mdp.joint_deviation_l1,
-        weight=-0.15,
+        weight=-0.25,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_hip_yaw_joint"])},
     )
 
