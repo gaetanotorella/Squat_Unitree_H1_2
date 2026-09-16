@@ -87,22 +87,30 @@ private:
         
         // Check if need to change state
         int nextStateMode = 0;
+        int firedCheck = -1;
         for(int i(0); i<currentState->registered_checks.size(); i++)
         {
             if(currentState->registered_checks[i].first())
             {
                 nextStateMode = currentState->registered_checks[i].second;
+                firedCheck = i;
                 break;
             }
         }
 
         if(nextStateMode != 0 && !currentState->isState(nextStateMode))
         {
+            // L'ultimo check registrato e' SEMPRE il fallback "lowstate in timeout -> Passive"
+            // (vedi FSMState); tutti gli altri sono transizioni da joystick. Distinguere le due
+            // cose nel log e' indispensabile sul robot reale: un ritorno a Passive per timeout e'
+            // un problema di comunicazione, uno da joystick e' l'operatore.
+            const bool byTimeout = (firedCheck == (int)currentState->registered_checks.size() - 1);
             for(auto & state : states)
             {
                 if(state->isState(nextStateMode))
                 {
-                    spdlog::info("FSM: Change state from {} to {}", currentState->getStateString(), state->getStateString());
+                    spdlog::info("FSM: Change state from {} to {} ({})", currentState->getStateString(), state->getStateString(),
+                                 byTimeout ? "LOWSTATE TIMEOUT > 1000 ms" : "joystick");
                     currentState->exit();
                     currentState = state;
                     currentState->enter();

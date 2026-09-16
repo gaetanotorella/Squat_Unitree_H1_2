@@ -21,3 +21,11 @@ recordings/
 **/*.egg-info/
 # ignore isaac sim symlink
 _isaac_sim?
+# --- deploy/docker/Dockerfile (controller per il PC di bordo): tiene fuori le build native e
+# la copia dell'SDK dal contesto; `**/logs/` sopra esclude gia' i checkpoint.
+deploy/robots/*/build/
+deploy/docker/_ctx/unitree_sdk2/build/
+deploy/docker/_ctx/unitree_sdk2/.git/
+sim_logs/
+source/
+tools/
