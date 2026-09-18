@@ -26,9 +26,13 @@
 name: standard_v2
 nominal_height: 0.98
 deepest_height: 0.60
+# rampe del target di quota del CONTROLLER (observations.h): il joystick scriptato le usa per
+# sapere quanto tenere RT/B. Se il controller cambia, cambiare qui, o le quote arrivano sbagliate.
+descend_rate: 0.05
+rise_rate: 0.05
 band_release_at: 12.0
 overhold: 1.5
-stop_at: 282.0
+stop_at: 306.0
 
 timeline:
   # ---- avvio ---------------------------------------------------------------------------
@@ -54,30 +58,32 @@ timeline:
   - {t:  98.0, wz:  0.0}
 
   # ---- C) scala di quote da fermo, ogni volta RIPARTENDO da 0.98 ------------------------
+  # Con le rampe a 0.05 m/s: 0.98->0.85 2.6 s, ->0.74 4.8 s, ->0.66 6.4 s, ->0.60 7.6 s, ritorni
+  # uguali + overhold 1.5 s. Gli intervalli lasciano >= 3 s di quota assestata.
   - {t: 102.0, height: 0.85}
   - {t: 110.0, height: 0.98}
   - {t: 116.0, height: 0.74}
-  - {t: 124.0, height: 0.98}
-  - {t: 130.0, height: 0.66}
-  - {t: 138.0, height: 0.98}
-  - {t: 144.0, height: 0.60}    # 24 s a fondo corsa: la tenuta lunga da difendere
-  - {t: 168.0, height: 0.98}
+  - {t: 126.0, height: 0.98}
+  - {t: 134.0, height: 0.66}
+  - {t: 144.0, height: 0.98}
+  - {t: 154.0, height: 0.60}    # 7.6 s di discesa + 24 s a fondo corsa: la tenuta lunga da difendere
+  - {t: 186.0, height: 0.98}
 
   # ---- D) mezzo squat 0.74 m, gli stessi sei assi ---------------------------------------
-  - {t: 176.0, height: 0.74}
-  - {t: 182.0, vx:  1.0}
-  - {t: 191.0, vx:  0.0}
-  - {t: 195.0, vx: -0.3}
-  - {t: 204.0, vx:  0.0}
-  - {t: 208.0, vy:  0.3}
-  - {t: 217.0, vy:  0.0}
-  - {t: 221.0, vy: -0.3}
-  - {t: 230.0, vy:  0.0}
-  - {t: 234.0, wz:  0.5}
-  - {t: 243.0, wz:  0.0}
-  - {t: 247.0, wz: -0.5}
-  - {t: 256.0, wz:  0.0}
+  - {t: 198.0, height: 0.74}
+  - {t: 206.0, vx:  1.0}
+  - {t: 215.0, vx:  0.0}
+  - {t: 219.0, vx: -0.3}
+  - {t: 228.0, vx:  0.0}
+  - {t: 232.0, vy:  0.3}
+  - {t: 241.0, vy:  0.0}
+  - {t: 245.0, vy: -0.3}
+  - {t: 254.0, vy:  0.0}
+  - {t: 258.0, wz:  0.5}
+  - {t: 267.0, wz:  0.0}
+  - {t: 271.0, wz: -0.5}
+  - {t: 280.0, wz:  0.0}
 
   # ---- E) ritorno in piedi e fermo finale ------------------------------------------------
-  - {t: 260.0, height: 0.98}
-  - {t: 270.0}
+  - {t: 284.0, height: 0.98}
+  - {t: 294.0}

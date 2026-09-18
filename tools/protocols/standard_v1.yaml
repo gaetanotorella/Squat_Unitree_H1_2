@@ -19,6 +19,10 @@
 name: standard_v1
 nominal_height: 0.98
 deepest_height: 0.60
+# rampe del target di quota del CONTROLLER (observations.h): il joystick scriptato le usa per
+# sapere quanto tenere RT/B. Se il controller cambia, cambiare qui, o le quote arrivano sbagliate.
+descend_rate: 0.05
+rise_rate: 0.05
 band_release_at: 12.0
 stop_at: 262.0
 

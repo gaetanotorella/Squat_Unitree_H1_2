@@ -52,30 +52,27 @@ rifiuta di confrontare run di protocolli diversi.
 i cinque run di confronto del 2026-09-13 (`sim_logs/automatic/`) lo usano, e `compare_runs.py`
 rifiuta di confrontare protocolli diversi.
 
-**Perché esiste v2 — un difetto del banco, non del robot.** Il joystick scriptato integra la rampa
-di quota contro il tempo di simulazione; il controller fa `squat_target -= 0.15*step_dt` una volta
-per passo di policy con `step_dt` nominale 0.02, e il suo ciclo gira a ~46 Hz: sotto-integra
-dell'8%, e l'errore si accumula a ogni rampa.
+**Perché esiste v2 — un difetto del banco, non del robot.** Nei cinque run di confronto del
+2026-09-13 le quote intermedie arrivavano più alte del richiesto (0.85 → 0.860, 0.74 → 0.761,
+0.66 → 0.692, **0.60 → 0.641**), con l'errore che si accumulava a ogni rampa. Avevo attribuito la
+cosa al ciclo del controller "a ~46 Hz": **era sbagliato**. La causa vera, trovata il 2026-09-18:
+nel joystick scriptato `RT` veniva scritto due volte per ciclo (`RT(0)` "tutto rilasciato", poi
+`RT(1)`), e `RT` è un `Axis` con filtro EMA — due aggiornamenti per ciclo portano il punto fisso a
+0.508, esattamente sulla soglia 0.5 con cui il controller decide `R2.pressed`. Il bit sfarfallava
+per arrotondamento: 8% di perdita in quei run, 67% in un altro. Ora ogni tasto è scritto **una
+volta per ciclo** e il bit è stabile; il modello di quota del joystick coincide col controller al
+millimetro. L'`overhold` e la ri-ancoratura a 0.98 di v2 restano: innocui, e proteggono da
+qualsiasi altra deriva futura.
 
-| chiesta | ricevuta dal controller | scarto |
-|---|---|---|
-| 0.85 | 0.860 | +0.010 |
-| 0.74 | 0.761 | +0.021 |
-| 0.66 | 0.692 | +0.032 |
-| 0.60 | **0.641** | **+0.041** |
+Identico in tutti i run, quindi il confronto fra le policy del 09-13 resta valido fra loro. Le
+metriche misurano comunque contro il **target loggato dal controller** (`base_height_command_0`,
+già in `obs.csv`), non contro il valore del protocollo, e riportano entrambe le quote nel report
+(colonne `h prot` e `h ctrl`).
 
-Identico in tutti i run, quindi il confronto fra policy resta valido — ma il "fondo squat a 0.60"
-era a 0.641, e l'errore di quota che sembrava cedimento del robot (+4 cm) era quasi tutto
-disallineamento. L'errore di inseguimento vero è ≤ 5 mm.
-
-v2 corregge con due mosse: `overhold: 1.5` (agli estremi il tasto resta premuto oltre il
-necessario — lì il controller **clampa**, quindi finisce esattamente sul limite) e ogni quota
-intermedia raggiunta ripartendo da 0.98 invece di concatenare le discese, così l'errore non si
-accumula più.
-
-Da allora `report_metrics.py` misura `h_err` contro il **target loggato dal controller**
-(`base_height_command_0`, già in `obs.csv`), non contro il valore del protocollo, e riporta
-entrambe le quote nel report (colonne `h prot` e `h ctrl`).
+**Le rampe del controller sono nel protocollo.** `descend_rate` / `rise_rate` (oggi 0.05 m/s,
+commit `7e3bb51`) devono coincidere con `observations.h` del controller: il joystick scriptato le
+usa per sapere quanto tenere RT/B. Se il controller cambia, si cambiano lì, altrimenti le quote
+arrivano sbagliate e il check "scarto del banco" lo segnala.
 
 ## Struttura del protocollo
 

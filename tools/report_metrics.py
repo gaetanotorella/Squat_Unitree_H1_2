@@ -118,7 +118,11 @@ def measure(run: Path):
         # e l'errore si accumula a ogni rampa (misurato: 0.85 -> 0.860, 0.74 -> 0.761, 0.66 -> 0.692,
         # 0.60 -> 0.641). Misurare contro il protocollo attribuiva al robot un cedimento di 4 cm che
         # era tutto disallineamento del banco: l'errore di inseguimento vero e' <= 5 mm.
-        h_ctrl = float(d["hcmd"][m].mean())
+        # media sulla SECONDA META' del segmento: con le rampe del controller a 0.05 m/s una risalita
+        # da 0.60 dura 7.6 s e il segmento la contiene per intero -> la media su tutto darebbe un
+        # falso "scarto del banco".
+        idx_m = np.where(m)[0]; m2 = np.zeros_like(m); m2[idx_m[len(idx_m) // 2:]] = True
+        h_ctrl = float(d["hcmd"][m2].mean())
         cx, cy, cw = s["vx"], s["vy"], s["wz"]
         # comando EFFETTIVO visto dalla policy (dopo lo scaling per profondita' del controller)
         sc = d["vc"][m].mean(axis=0)
@@ -128,8 +132,8 @@ def measure(run: Path):
             "t0": round(s["t0"], 1), "dur": round(b_sim - a_sim, 1),
             "h_cmd": s["height"],                      # quota chiesta dal protocollo
             "h_ctrl": round(h_ctrl, 4),                # quota effettivamente comandata al robot
-            "h_act": round(float(d["bz"][m].mean()), 4),
-            "h_err": round(float(d["bz"][m].mean() - h_ctrl), 4),      # inseguimento VERO
+            "h_act": round(float(d["bz"][m2].mean()), 4),                 # stessa finestra di h_ctrl
+            "h_err": round(float(d["bz"][m2].mean() - h_ctrl), 4),      # inseguimento VERO
             "h_drift": round(h_ctrl - s["height"], 4),                 # scarto del banco
             "stick": [cx, cy, cw],
             "cmd_scaled": [round(float(v), 3) for v in sc],
