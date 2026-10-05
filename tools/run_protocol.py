@@ -53,6 +53,10 @@ def main() -> int:
     ap.add_argument("--policy", default=None, help="cartella del run di training (default: la piu' recente)")
     ap.add_argument("--label", default=None, help="etichetta del run, finisce in run_meta.json")
     ap.add_argument("--no-plots", action="store_true", help="salta analyze_sim.py")
+    ap.add_argument("--no-metrics", action="store_true",
+                    help="salta report_metrics.py (per i replay: le metriche a segmenti del protocollo non hanno senso)")
+    ap.add_argument("--meta", action="append", default=[], metavar="CHIAVE=VALORE",
+                    help="campi extra da scrivere in run_meta.json (ripetibile)")
     ap.add_argument("--python", default=str(WS / "venv_sim" / "bin" / "python"))
     ap.add_argument("--keep-config", action="store_true", help="conserva i config temporanei generati")
     args = ap.parse_args()
@@ -84,6 +88,7 @@ def main() -> int:
     sim_cfg["joystick_type"] = "script"
     sim_cfg["joystick_script"] = str(protocol)
     sim_cfg["enable_elastic_band"] = 1   # serve durante FixStand; il rilascio e' nel protocollo
+    sim_cfg["disturbance_script"] = ""   # nelle prove automatiche nessuna spinta da tastiera, mai
     sim_cfg_path = tmp / "sim_config.yaml"
     sim_cfg_path.write_text(yaml.safe_dump(sim_cfg, sort_keys=False))
 
@@ -176,17 +181,22 @@ def main() -> int:
         "git_commit": git("rev-parse", "--short", "HEAD"),
         "git_dirty": bool(git("status", "--porcelain")),
     }
+    for kv in args.meta:
+        k, _, v = kv.partition("=")
+        meta[k] = v
     (run_dir / "run_meta.json").write_text(json.dumps(meta, indent=2))
 
     # --- metriche + report -------------------------------------------------------------------
-    rc = subprocess.call([args.python, str(Path(__file__).parent / "report_metrics.py"), str(run_dir)])
-    if rc != 0:
-        print("ATTENZIONE: report_metrics.py ha fallito")
+    if not args.no_metrics:
+        rc = subprocess.call([args.python, str(Path(__file__).parent / "report_metrics.py"), str(run_dir)])
+        if rc != 0:
+            print("ATTENZIONE: report_metrics.py ha fallito")
 
     if not args.no_plots:
         subprocess.call([args.python, str(Path(__file__).parent / "analyze_sim.py"), str(run_dir)])
 
     print(f"\nfatto. report: {run_dir / 'report.md'}")
+    print(f"RUN_DIR={run_dir}")
     return 0
 
 
