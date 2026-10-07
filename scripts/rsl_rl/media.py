@@ -27,6 +27,8 @@ Preset (i file finiscono in media_tesi/, con accanto un .json che dice come sono
     V4c  come V4a ma rotazione sul posto wz 0.5, camera laterale
     V5a  spinte da fermo a 0.98 m ogni 3 s, camera laterale
     V5b  spinte da fermo a 0.70 m ogni 3 s, camera laterale
+    V6a  4096 robot, la camera gira attorno al centro (distanza 16 m, elevazione 35 deg), 24 s
+    V6b  come V6a con distanza 20 m ed elevazione 28 deg
 
 Cosa cambia rispetto a play.py, per tutti i preset:
   * terreno piano con i robot su una griglia (env_spacing): col terreno generato i robot nascono al
@@ -84,6 +86,12 @@ CAM_GRID_32_2 = dict(mode="grid", dist=10.0, elev=30.0, azim=135.0, look_z=0.5, 
 CAM_GRID_32_3 = dict(mode="grid", dist=30.0, elev=22.0, azim=135.0, look_z=0.8, frac=0.0)
 
 CAM_GRID_4096 = dict(mode="grid", dist=30.0, elev=22.0, azim=135.0, look_z=0.8, frac=0.8)
+# ORBITA: la camera gira su una circonferenza attorno al centro della griglia e punta sempre al centro
+# (dist = distanza camera-centro, elev = elevazione, azim = punto di partenza). period = secondi per un
+# giro completo, positivo = antiorario visto dall'alto. Il sole resta fermo nel mondo (orientato rispetto
+# all'azimut di PARTENZA): durante il giro la luce passa da tre quarti a controluce e ritorno.
+CAM_ORBIT_16 = dict(mode="orbit", dist=16.0, elev=35.0, azim=135.0, look_z=0.5, period=24.0)
+CAM_ORBIT_20 = dict(mode="orbit", dist=20.0, elev=28.0, azim=135.0, look_z=0.5, period=24.0)
 CAM_SIDE = dict(mode="follow", dist=3.8, azim=90.0, eye_z=1.4, look_z=0.8)
 CAM_FRONT = dict(mode="follow", dist=3.8, azim=180.0, eye_z=1.4, look_z=0.8)
 
@@ -148,6 +156,11 @@ PRESETS = {
 
     "V1": dict(kind="video", name="V1_scala", num_envs=4096, spacing=2.5, duration=12.0, preroll=1.0,
                dr=True, cam=CAM_GRID_4096, arrows="off", mods=[]),
+    # V6: un giro completo di camera attorno ai 4096 env, sempre puntata verso il centro
+    "V6a": dict(kind="video", name="V6a_orbita_d16_e35", num_envs=4096, spacing=2.5, duration=24.0, preroll=1.0,
+                dr=True, cam=CAM_ORBIT_16, arrows="off", mods=[]),
+    "V6b": dict(kind="video", name="V6b_orbita_d20_e28", num_envs=4096, spacing=2.5, duration=24.0, preroll=1.0,
+                dr=True, cam=CAM_ORBIT_20, arrows="off", mods=[]),
     "V2": dict(kind="video", name="V2_misti", num_envs=32, spacing=4.0, duration=18.0, preroll=1.0,
                dr=True, cam=CAM_GRID_32, arrows="on", mods=[]),
     "V2a": dict(kind="video", name="V2a_misti", num_envs=512, spacing=2.0, duration=18.0, preroll=1.0,
@@ -207,6 +220,9 @@ parser.add_argument("--cam_azim", type=float, default=None, help="Direzione dell
 parser.add_argument("--cam_eye_z", type=float, default=None, help="Camere 'follow': altezza della camera [m].")
 parser.add_argument("--cam_look_z", type=float, default=None, help="Altezza del punto inquadrato [m].")
 parser.add_argument("--cam_smooth", type=float, default=0.4, help="Camere 'follow': costante di tempo [s].")
+parser.add_argument("--orbit_period", type=float, default=None,
+                    help="Camere 'orbit': secondi per un giro completo (negativo = orario). Default del preset: 24 s, "
+                         "un giro esatto nella durata del video.")
 parser.add_argument("--focal_length", type=float, default=None, help="Focale della camera [mm] (default Kit 18.1).")
 parser.add_argument("--look", choices=("tesi", "isaac"), default="tesi",
                     help="'tesi' = robot nero, pavimento chiaro, sole con ombre nette e cielo uniforme; "
@@ -392,6 +408,12 @@ class Camera:
             prim = omni.usd.get_context().get_stage().GetPrimAtPath(base_env.cfg.viewer.cam_prim_path)
             self.usd_cam = UsdGeom.Camera(prim)
             self.usd_cam.GetFStopAttr().Set(float(args.fstop))
+        if args.orbit_period is not None:
+            self.p["period"] = args.orbit_period
+        self.t = 0.0
+        if self.p["mode"] == "orbit":
+            c = base_env.scene.env_origins.cpu().numpy().mean(axis=0)
+            self.look = np.array([c[0], c[1], self.p["look_z"]])  # il centro della circonferenza
         if self.p["mode"] == "grid":
             o = base_env.scene.env_origins.cpu().numpy()
             c = o.mean(axis=0)
@@ -404,7 +426,15 @@ class Camera:
                 [math.cos(e) * math.cos(a), math.cos(e) * math.sin(a), math.sin(e)])
         self.update()
 
-    def update(self):
+    def update(self, t: float | None = None):
+        """t = tempo dall'inizio del video [s]; serve solo all'orbita (None = l'ultimo ricevuto)."""
+        if t is not None:
+            self.t = t
+        if self.p["mode"] == "orbit":
+            e = math.radians(self.p["elev"])
+            a = math.radians(self.p["azim"] + 360.0 * self.t / self.p["period"])
+            self.eye = self.look + self.p["dist"] * np.array(
+                [math.cos(e) * math.cos(a), math.cos(e) * math.sin(a), math.sin(e)])
         if self.p["mode"] == "follow":
             xy = self.robot.data.root_pos_w[0, :2].cpu().numpy()
             self.xy = xy if self.xy is None else self.xy + self.alpha * (xy - self.xy)
@@ -805,6 +835,10 @@ def main():
     writer = None
     if kind == "video":
         name = preset["name"]
+        if preset["cam"]["mode"] == "orbit":  # il nome dice distanza ed elevazione davvero usate
+            d = args_cli.cam_dist if args_cli.cam_dist is not None else preset["cam"]["dist"]
+            el = args_cli.cam_elev if args_cli.cam_elev is not None else preset["cam"]["elev"]
+            name = f"{name.split('_orbita')[0]}_orbita_d{d:g}_e{el:g}"
         mp4 = out_path(out_dir, name, ".mp4", args_cli.overwrite)
         w, h = env_cfg.viewer.resolution
         writer = Mp4Writer(mp4, w, h, fps)
@@ -830,7 +864,7 @@ def main():
                                "dvy": round(float(dv[1]), 3), "|dv|": round(float(np.hypot(*dv)), 3)})
             actions = policy(obs)
             obs, _, _, _ = env.step(actions)
-        cam.update()
+        cam.update(t=(i - preroll + 1) * dt)
 
         if kind == "video":
             if i < preroll:
