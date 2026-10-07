@@ -107,9 +107,12 @@ CAM_FRONT = dict(mode="follow", dist=3.8, azim=180.0, eye_z=1.4, look_z=0.8)
 # senza cambiarne la forma. Ogni parametro si cambia con --traj chiave=valore (es. --traj z_top=250).
 # azim serve solo a orientare il sole (vedi LUCE): la direzione da cui la camera guarda la scena per la
 # maggior parte del percorso.
-# FUOCO (con --fstop > 0): parte da focus_near [m] e va all'infinito tra le frazioni focus_from e focus_to
-# della durata. Si interpola in diottrie (1/d): lo sfocato di un oggetto a distanza d e' proporzionale a
-# |1/d - 1/d_fuoco|, quindi cambia a ritmo costante invece di concentrarsi tutto alla fine.
+# FUOCO (con --fstop > 0): parte da focus_near [m] e arriva a focus_far (1e4 = infinito) tra le frazioni
+# focus_from e focus_to della durata. Si interpola in diottrie (1/d): lo sfocato di un oggetto a distanza d
+# e' proporzionale a |1/d - 1/d_fuoco|, quindi cambia a ritmo costante invece di concentrarsi alla fine.
+# Misurato sulle anteprime del V7b (2026-10-08): ~130 px di sfocatura per diottria a f/11, ~65 a f/22, ~45
+# a f/32 (1920 px di larghezza). La finestra va chiusa PRIMA che i robot in vista siano tutti lontani: col
+# trench a 9-18 s, a 12 s il fuoco era a 7 m e i robot a 25-100 m, immagine tutta sfocata.
 TRAJ_DEFAULTS = {
     # VERTICAL REVEAL: parte da (x0, y0, z0) puntata al centro, carrellata all'indietro di `back` m nella
     # prima frazione `dolly`; poi, nella frazione `rise`, sale fino a z_top tornando sopra il centro, col
@@ -117,33 +120,40 @@ TRAJ_DEFAULTS = {
     # meta'); il beccheggio segue la quota in scala logaritmica, cioe' quanto si rimpicciolisce la scena:
     # ~50 deg a 17 m, quasi zenitale gia' a 75 m, poi la camera sale ancora guardando giu'.
     "reveal": dict(x0=0.0, y0=-5.0, z0=1.5, look_z=0.9, back=5.0, z_top=150.0, dolly=0.25, rise=0.65,
-                   focus_near=5.0, focus_from=0.0, focus_to=0.5),
+                   focus_near=5.0, focus_far=1.0e4, focus_from=0.0, focus_to=0.5),
     # TRENCH RUN: nel corridoio fra due file di robot a quota z0, da y0 fino al centro (y = 0) a velocita'
-    # costante nella frazione `run`, guardando lungo il corridoio (ahead m avanti, drop m piu' in basso).
+    # costante nella frazione `run`, guardando lungo il corridoio (ahead m avanti, drop m piu' in basso: con
+    # 2.7 la vista scende di 6 deg e l'orizzonte sta nel terzo superiore; con 0.5 era a meta' immagine).
     # Da y = 0, nella frazione `lift`: frenata dolce in avanti (velocita' continua), salita a z_top e pan
     # verso l'angolo (corner_x, corner_y, corner_z); aim_down [deg] abbassa la vista finale sotto l'angolo
-    # (6.2 = angolo nel terzo superiore dell'immagine). x = il corridoio voluto: si usa quello fra due file
+    # (6.2 = angolo nel terzo superiore dell'immagine invece che al centro, con sopra solo pavimento vuoto).
+    # Fuoco all'infinito nei primi 3 s di salita (focus_to 0.6). x = il corridoio voluto: si usa quello fra due file
     # piu' vicino (x = 1.25 e' proprio una fila, il corridoio accanto e' a x = 0).
-    "trench": dict(x=1.25, y0=-80.0, z0=1.5, ahead=25.0, drop=0.5, run=0.45, lift=0.45, z_top=30.0,
-                   corner_x=80.0, corner_y=80.0, corner_z=0.5, aim_down=0.0, focus_near=5.0, focus_from=0.45,
-                   focus_to=0.9),
+    "trench": dict(x=1.25, y0=-80.0, z0=1.5, ahead=25.0, drop=2.7, run=0.45, lift=0.45, z_top=30.0,
+                   corner_x=80.0, corner_y=80.0, corner_z=0.5, aim_down=6.2, focus_near=5.0, focus_far=1.0e4,
+                   focus_from=0.45, focus_to=0.6),
     # EXPANSIVE SPIRAL: orbita attorno a (cx, cy, look_z); raggio da r0 a r1 ed elevazione da elev0 a elev1
     # crescono linearmente con l'azimut, che va da azim0 ad azim0 + turn [deg]. L'azimut parte e si ferma
     # con dolcezza. Al centro di una griglia pari non c'e' un robot: --traj cx=1.25 cy=1.25 ne mette uno
     # al centro dell'inquadratura iniziale.
     "spiral": dict(cx=0.0, cy=0.0, look_z=0.8, r0=5.0, r1=180.0, elev0=10.0, elev1=60.0, azim0=0.0, turn=450.0,
-                   focus_near=5.0, focus_from=0.0, focus_to=0.35),
+                   focus_near=5.0, focus_far=1.0e4, focus_from=0.0, focus_to=0.35),
     # DIAGONAL SWEEP: da (x0, y0, z) a (x1, y1, z) lungo il bordo della griglia, col bersaglio fermo
     # nell'angolo opposto (look_x, look_y, look_z): le file di robot convergono nei punti di fuga, che
-    # ruotano durante la carrellata.
+    # ruotano durante la carrellata. Il fuoco NON va all'infinito: la prima fila resta a ~6 m per tutta la
+    # carrellata e a fuoco infinito sarebbe sfocata (~10 px a f/22). focus_far = 12 m = il doppio della
+    # prima fila: sfocato uguale e minimo (1/12 di diottria) sulla prima fila e all'orizzonte; con f/32
+    # ~3 px. focus_near 4 m: i robot a 3-5 m dell'angolo nitidi, lo sfondo sfocato (con 2.5 m nessun robot
+    # in vista era a fuoco).
     "sweep": dict(x0=-80.0, y0=-80.0, x1=80.0, y1=-80.0, z=2.0, look_x=80.0, look_y=80.0, look_z=2.0,
-                  focus_near=2.5, focus_from=0.0, focus_to=0.5),
+                  focus_near=4.0, focus_far=12.0, focus_from=0.0, focus_to=0.5),
 }
-# fstop: profondita' di campo accesa di default (--fstop la cambia, --fstop 0 la spegne)
-CAM_REVEAL = dict(mode="traj", traj="reveal", azim=270.0, fstop=11.0)
-CAM_TRENCH = dict(mode="traj", traj="trench", azim=270.0, fstop=11.0)
-CAM_SPIRAL = dict(mode="traj", traj="spiral", azim=0.0, fstop=11.0)
-CAM_SWEEP = dict(mode="traj", traj="sweep", azim=225.0, fstop=11.0)
+# fstop: profondita' di campo accesa di default (--fstop la cambia, --fstop 0 la spegne). Scelto f/22 sulle
+# anteprime del V7b: a f/11 anche i robot a fuoco erano morbidi e a mezza salita la scena era illeggibile.
+CAM_REVEAL = dict(mode="traj", traj="reveal", azim=270.0, fstop=22.0)
+CAM_TRENCH = dict(mode="traj", traj="trench", azim=270.0, fstop=22.0)
+CAM_SPIRAL = dict(mode="traj", traj="spiral", azim=0.0, fstop=22.0)
+CAM_SWEEP = dict(mode="traj", traj="sweep", azim=225.0, fstop=32.0)  # prima fila sempre vicina: vedi sweep
 
 # Gruppi di modifiche alla configurazione: (percorso puntato, valore). Un percorso che non esiste
 # ferma lo script con un errore: un nome sbagliato non deve passare in silenzio.
@@ -321,7 +331,8 @@ parser.add_argument("--sun_angle", type=float, default=0.53, help="Diametro appa
 parser.add_argument("--sky_intensity", type=float, default=800.0, help="--look tesi: luce diffusa del cielo uniforme.")
 parser.add_argument("--fstop", type=float, default=None,
                     help="Profondita' di campo: f-stop della camera (0 = spenta; piu' basso = piu' sfocato). Fuoco "
-                         "sul bersaglio, o animato come in TRAIETTORIE per i V7. Default: 11 per i V7, 0 per gli altri.")
+                         "sul bersaglio, o animato come in TRAIETTORIE per i V7. Default: 22 per i V7 (32 per V7d), 0 "
+                         "per gli altri.")
 parser.add_argument("--ground_shade", type=float, default=0.35, help="--ground grey: grigio del pavimento (0-1).")
 parser.add_argument("--arrow_scale", type=float, default=None, help="Spessore/lunghezza delle frecce (Isaac Lab: 0.5).")
 parser.add_argument("--settle", type=int, default=32, help="Render ripetuti sullo stesso stato per uno scatto fermo.")
@@ -548,9 +559,9 @@ def traj_pose(kind: str, P: dict, u: float):
 
 
 def traj_focus(P: dict, u: float) -> float:
-    """Distanza di fuoco [m]: focus_near fino a focus_from, infinito da focus_to, in mezzo lineare in 1/d."""
+    """Distanza di fuoco [m]: focus_near fino a focus_from, focus_far da focus_to, in mezzo lineare in 1/d."""
     w = _smooth((u - P["focus_from"]) / max(P["focus_to"] - P["focus_from"], 1e-6))
-    inv = (1.0 - w) / P["focus_near"]
+    inv = (1.0 - w) / P["focus_near"] + w / P.get("focus_far", FOCUS_INF)
     return FOCUS_INF if inv <= 1.0 / FOCUS_INF else 1.0 / inv
 
 
@@ -780,8 +791,11 @@ def calibrate_floor(base, cam, shader, target_srgb, settle, iters: int = 8) -> d
     Correzione: secante in scala log-log (misurato ~ k * albedo^g, g stimato dagli ultimi due passi). La
     correzione proporzionale (g = 1) convergeva troppo piano: nel V7b del 2026-10-08 240 -> 233 -> 225 ->
     219 -> 214 -> 212 contro 206, perche' sul pavimento chiaro l'immagine dipende poco dall'albedo (riflesso
-    del cielo, tone mapping: g ~ 0.3). Sugli stessi dati, simulati, la secante arriva entro 1 livello in 5
-    passi."""
+    del cielo, tone mapping: g ~ 0.3).
+    Il renderer ha memoria: dopo 48 render resta ~30% dell'immagine precedente. Con passi grandi la secante
+    oscillava (secondo test: 240 233 179 203 212 213 148 199). Quindi: si misura finche' due misure di fila
+    differiscono meno di 0.3 livelli, ogni passo cambia l'albedo al massimo di x0.7-x1.4 e g sta in
+    [0.15, 1.5]. Simulato con la stessa memoria: entro 1 livello in 5-6 passi."""
     from pxr import Gf, Sdf
 
     target = np.asarray(target_srgb, dtype=float)
@@ -791,13 +805,23 @@ def calibrate_floor(base, cam, shader, target_srgb, settle, iters: int = 8) -> d
     eye, look = cam.calib_view()
     base.sim.set_camera_view(tuple(float(v) for v in eye + off), tuple(float(v) for v in look + off))
     steps, meas, prev = [], target, None
+    def measure(n):
+        img = settle(n)
+        h, w = img.shape[:2]
+        return np.median(img[int(0.60 * h):int(0.95 * h), int(0.2 * w):int(0.8 * w)].reshape(-1, 3).astype(float), axis=0)
+
     for _ in range(iters):
         set_input(shader, "inputs:diffuse_color_constant", Sdf.ValueTypeNames.Color3f, Gf.Vec3f(*map(float, c)))
-        img = settle(48)
-        h, w = img.shape[:2]
-        band = img[int(0.60 * h):int(0.95 * h), int(0.2 * w):int(0.8 * w)].reshape(-1, 3).astype(float)
-        meas = np.median(band, axis=0)
-        steps.append({"albedo": [round(float(v), 4) for v in c], "misurato_srgb": [round(float(v), 1) for v in meas]})
+        meas, n = measure(32), 32
+        for _ in range(12):  # finche' l'immagine non smette di cambiare
+            m2 = measure(16)
+            n += 16
+            stable = np.abs(m2 - meas).max() < 0.3
+            meas = m2
+            if stable:
+                break
+        steps.append({"albedo": [round(float(v), 4) for v in c], "misurato_srgb": [round(float(v), 1) for v in meas],
+                      "render": n})
         if np.abs(meas - target).max() <= 1.0:
             break
         lc, lm = np.log(np.maximum(c, 1e-4)), np.log(np.maximum(srgb_to_lin(meas / 255.0), 1e-4))
@@ -805,9 +829,10 @@ def calibrate_floor(base, cam, shader, target_srgb, settle, iters: int = 8) -> d
         if prev is not None:
             dc = lc - prev[0]
             g = np.where(np.abs(dc) > 1e-6, (lm - prev[1]) / np.where(np.abs(dc) > 1e-6, dc, 1.0), 1.0)
-            g = np.clip(g, 0.05, 2.0)
+            g = np.clip(g, 0.15, 1.5)
         prev = (lc, lm)
-        c = np.clip(np.exp(lc + (np.log(target_lin) - lm) / g), 1e-3, 1.0)
+        step = np.clip((np.log(target_lin) - lm) / g, math.log(0.7), math.log(1.4))
+        c = np.clip(np.exp(lc + step), 1e-3, 1.0)
     cam.update()  # di nuovo sull'inquadratura vera
     ok = bool(np.abs(meas - target).max() <= 1.0)
     print(f"[media] pavimento: voluto sRGB {tuple(int(v) for v in target)}, ottenuto {tuple(int(round(v)) for v in meas)} "
