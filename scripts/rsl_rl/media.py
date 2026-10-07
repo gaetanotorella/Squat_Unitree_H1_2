@@ -29,6 +29,12 @@ Preset (i file finiscono in media_tesi/, con accanto un .json che dice come sono
     V5b  spinte da fermo a 0.70 m ogni 3 s, camera laterale
     V6a  4096 robot, la camera gira attorno al centro (distanza 16 m, elevazione 35 deg), 24 s
     V6b  come V6a con distanza 20 m ed elevazione 28 deg
+    V7a  4096 robot, vertical reveal: dal livello dei robot alla vista zenitale da 150 m, 24 s
+    V7b  4096 robot fermi a quote casuali, trench run: in volo lungo un corridoio, poi su verso un angolo, 20 s
+    V7c  4096 robot, spirale: raggio da 5 a 180 m ed elevazione da 10 a 60 deg in un giro e un quarto, 30 s
+    V7d  4096 robot fermi a quote casuali, carrellata lungo il bordo puntata sull'angolo opposto, 24 s
+    (V7: vedi TRAIETTORIE; --traj chiave=valore cambia un parametro del percorso, --crowd il comportamento
+    dei robot, --fstop la profondita' di campo: --fstop 0 la spegne)
 
 Cosa cambia rispetto a play.py, per tutti i preset:
   * terreno piano con i robot su una griglia (env_spacing): col terreno generato i robot nascono al
@@ -95,6 +101,48 @@ CAM_ORBIT_20 = dict(mode="orbit", dist=20.0, elev=28.0, azim=135.0, look_z=0.5, 
 CAM_SIDE = dict(mode="follow", dist=3.8, azim=90.0, eye_z=1.4, look_z=0.8)
 CAM_FRONT = dict(mode="follow", dist=3.8, azim=180.0, eye_z=1.4, look_z=0.8)
 
+# TRAIETTORIE ("traj"): la camera segue un percorso nel tempo. Coordinate in metri RISPETTO AL CENTRO della
+# griglia, scritte per 4096 robot a 2.5 m (64 x 64, lato 160 m: bordo a +-80 m; le file di robot stanno a
+# +-1.25, +-3.75, ...). Il percorso dipende solo da u = t / durata: --duration lo accelera o lo rallenta
+# senza cambiarne la forma. Ogni parametro si cambia con --traj chiave=valore (es. --traj z_top=250).
+# azim serve solo a orientare il sole (vedi LUCE): la direzione da cui la camera guarda la scena per la
+# maggior parte del percorso.
+# FUOCO (con --fstop > 0): parte da focus_near [m] e va all'infinito tra le frazioni focus_from e focus_to
+# della durata. Si interpola in diottrie (1/d): lo sfocato di un oggetto a distanza d e' proporzionale a
+# |1/d - 1/d_fuoco|, quindi cambia a ritmo costante invece di concentrarsi tutto alla fine.
+TRAJ_DEFAULTS = {
+    # VERTICAL REVEAL: parte da (x0, y0, z0) puntata al centro, carrellata all'indietro di `back` m nella
+    # prima frazione `dolly`; poi, nella frazione `rise`, sale fino a z_top tornando sopra il centro, col
+    # beccheggio che arriva alla vista zenitale. La salita in metri parte e arriva dolce (picco ~14 m/s a
+    # meta'); il beccheggio segue la quota in scala logaritmica, cioe' quanto si rimpicciolisce la scena:
+    # ~50 deg a 17 m, quasi zenitale gia' a 75 m, poi la camera sale ancora guardando giu'.
+    "reveal": dict(x0=0.0, y0=-5.0, z0=1.5, look_z=0.9, back=5.0, z_top=150.0, dolly=0.25, rise=0.65,
+                   focus_near=5.0, focus_from=0.0, focus_to=0.5),
+    # TRENCH RUN: nel corridoio fra due file di robot a quota z0, da y0 fino al centro (y = 0) a velocita'
+    # costante nella frazione `run`, guardando lungo il corridoio (ahead m avanti, drop m piu' in basso).
+    # Da y = 0, nella frazione `lift`: frenata dolce in avanti (velocita' continua), salita a z_top e pan
+    # verso l'angolo (corner_x, corner_y, corner_z). x = il corridoio voluto: si usa quello fra due file
+    # piu' vicino (x = 1.25 e' proprio una fila, il corridoio accanto e' a x = 0).
+    "trench": dict(x=1.25, y0=-80.0, z0=1.5, ahead=25.0, drop=0.5, run=0.45, lift=0.45, z_top=30.0,
+                   corner_x=80.0, corner_y=80.0, corner_z=0.5, focus_near=5.0, focus_from=0.45, focus_to=0.9),
+    # EXPANSIVE SPIRAL: orbita attorno a (cx, cy, look_z); raggio da r0 a r1 ed elevazione da elev0 a elev1
+    # crescono linearmente con l'azimut, che va da azim0 ad azim0 + turn [deg]. L'azimut parte e si ferma
+    # con dolcezza. Al centro di una griglia pari non c'e' un robot: --traj cx=1.25 cy=1.25 ne mette uno
+    # al centro dell'inquadratura iniziale.
+    "spiral": dict(cx=0.0, cy=0.0, look_z=0.8, r0=5.0, r1=180.0, elev0=10.0, elev1=60.0, azim0=0.0, turn=450.0,
+                   focus_near=5.0, focus_from=0.0, focus_to=0.35),
+    # DIAGONAL SWEEP: da (x0, y0, z) a (x1, y1, z) lungo il bordo della griglia, col bersaglio fermo
+    # nell'angolo opposto (look_x, look_y, look_z): le file di robot convergono nei punti di fuga, che
+    # ruotano durante la carrellata.
+    "sweep": dict(x0=-80.0, y0=-80.0, x1=80.0, y1=-80.0, z=2.0, look_x=80.0, look_y=80.0, look_z=2.0,
+                  focus_near=2.5, focus_from=0.0, focus_to=0.5),
+}
+# fstop: profondita' di campo accesa di default (--fstop la cambia, --fstop 0 la spegne)
+CAM_REVEAL = dict(mode="traj", traj="reveal", azim=270.0, fstop=11.0)
+CAM_TRENCH = dict(mode="traj", traj="trench", azim=270.0, fstop=11.0)
+CAM_SPIRAL = dict(mode="traj", traj="spiral", azim=0.0, fstop=11.0)
+CAM_SWEEP = dict(mode="traj", traj="sweep", azim=225.0, fstop=11.0)
+
 # Gruppi di modifiche alla configurazione: (percorso puntato, valore). Un percorso che non esiste
 # ferma lo script con un errore: un nome sbagliato non deve passare in silenzio.
 STANDING = [
@@ -112,6 +160,12 @@ NO_DR = [
     ("events.randomize_actuator_gains", None),
     ("events.randomize_base_com", None),
 ]
+# FOLLA (--crowd, preset con piu' robot): al reset sempre sul punto esatto della griglia (in training
+# +-0.5 m: robot vicini nascono compenetrati e le file non sono allineate), orientamento casuale.
+# 'misti' = comandi del training: camminano, girano, si accovacciano (in 20 s si spostano di metri);
+# 'squat' = fermi sul posto a quote casuali e senza spinte: file dritte e corridoi liberi.
+LATTICE_RESET = [("events.reset_base.params.pose_range", {"x": (0.0, 0.0), "y": (0.0, 0.0), "yaw": (-3.14, 3.14)})]
+CROWD = {"misti": LATTICE_RESET, "squat": LATTICE_RESET + STANDING + [("events.push_robot", None)]}
 
 
 def crouch_walk(vx, vy, wz):
@@ -161,7 +215,17 @@ PRESETS = {
                 dr=True, cam=CAM_ORBIT_16, arrows="off", mods=[]),
     "V6b": dict(kind="video", name="V6b_orbita_d20_e28", num_envs=4096, spacing=2.5, duration=24.0, preroll=1.0,
                 dr=True, cam=CAM_ORBIT_20, arrows="off", mods=[]),
-    "V2": dict(kind="video", name="V2_misti", num_envs=32, spacing=4.0, duration=18.0, preroll=1.0,
+    # V7: traiettorie di camera temporizzate (vedi TRAIETTORIE). Robot fermi dove la camera vola fra le
+    # file (trench a 1.5 m) o sfrutta i loro allineamenti (sweep).
+    "V7a": dict(kind="video", name="V7a_vertical_reveal", num_envs=4096, spacing=2.5, duration=24.0, preroll=1.0,
+                dr=True, cam=CAM_REVEAL, arrows="off", crowd="misti", mods=[]),
+    "V7b": dict(kind="video", name="V7b_trench_run", num_envs=4096, spacing=2.5, duration=20.0, preroll=1.0,
+                dr=True, cam=CAM_TRENCH, arrows="off", crowd="squat", mods=[]),
+    "V7c": dict(kind="video", name="V7c_spirale", num_envs=4096, spacing=2.5, duration=30.0, preroll=1.0,
+                dr=True, cam=CAM_SPIRAL, arrows="off", crowd="misti", mods=[]),
+    "V7d": dict(kind="video", name="V7d_diagonale", num_envs=4096, spacing=2.5, duration=24.0, preroll=1.0,
+                dr=True, cam=CAM_SWEEP, arrows="off", crowd="squat", mods=[]),
+    "V2":dict(kind="video", name="V2_misti", num_envs=32, spacing=4.0, duration=18.0, preroll=1.0,
                dr=True, cam=CAM_GRID_32, arrows="on", mods=[]),
     "V2a": dict(kind="video", name="V2a_misti", num_envs=512, spacing=2.0, duration=18.0, preroll=1.0,
                 dr=True, cam=CAM_GRID_32, arrows="off", mods=[]),
@@ -223,6 +287,13 @@ parser.add_argument("--cam_smooth", type=float, default=0.4, help="Camere 'follo
 parser.add_argument("--orbit_period", type=float, default=None,
                     help="Camere 'orbit': secondi per un giro completo (negativo = orario). Default del preset: 24 s, "
                          "un giro esatto nella durata del video.")
+parser.add_argument("--traj", type=str, nargs="+", default=None, metavar="CHIAVE=VALORE",
+                    help="Camere 'traj' (V7): cambia parametri del percorso, es. --traj z_top=250 back=8. Chiavi e "
+                         "default in TRAJ_DEFAULTS; una chiave sbagliata ferma lo script con l'elenco di quelle valide.")
+parser.add_argument("--crowd", choices=("misti", "squat"), default=None,
+                    help="Preset con piu' robot: 'misti' = comandi del training, 'squat' = fermi a quote casuali; in "
+                         "entrambi i casi i robot partono sui punti esatti della griglia. Default: quello del preset "
+                         "(V7), altrimenti come in training.")
 parser.add_argument("--focal_length", type=float, default=None, help="Focale della camera [mm] (default Kit 18.1).")
 parser.add_argument("--look", choices=("tesi", "isaac"), default="tesi",
                     help="'tesi' = robot nero, pavimento chiaro, sole con ombre nette e cielo uniforme; "
@@ -246,8 +317,9 @@ parser.add_argument("--sun_rel_azim", type=float, default=135.0,
 parser.add_argument("--sun_intensity", type=float, default=3000.0)
 parser.add_argument("--sun_angle", type=float, default=0.53, help="Diametro apparente del sole [deg]: ombre nette.")
 parser.add_argument("--sky_intensity", type=float, default=800.0, help="--look tesi: luce diffusa del cielo uniforme.")
-parser.add_argument("--fstop", type=float, default=0.0,
-                    help="Profondita' di campo: f-stop della camera (0 = spenta), fuoco sul bersaglio.")
+parser.add_argument("--fstop", type=float, default=None,
+                    help="Profondita' di campo: f-stop della camera (0 = spenta; piu' basso = piu' sfocato). Fuoco "
+                         "sul bersaglio, o animato come in TRAIETTORIE per i V7. Default: 11 per i V7, 0 per gli altri.")
 parser.add_argument("--ground_shade", type=float, default=0.35, help="--ground grey: grigio del pavimento (0-1).")
 parser.add_argument("--arrow_scale", type=float, default=None, help="Spessore/lunghezza delle frecce (Isaac Lab: 0.5).")
 parser.add_argument("--settle", type=int, default=32, help="Render ripetuti sullo stesso stato per uno scatto fermo.")
@@ -255,8 +327,10 @@ parser.add_argument("--settle_toggle", type=int, default=128,
                     help="Render dopo aver spento le frecce: il renderer media i fotogrammi e con 16 restava "
                          "un fantasma delle frecce al ~10%%.")
 parser.add_argument("--warmup", type=int, default=300, help="Massimo di render iniziali per caricare materiali e cielo.")
-parser.add_argument("--preview", action="store_true", help="Salva un solo fotogramma ed esce.")
-parser.add_argument("--preview_at", type=float, default=3.0, help="Istante del fotogramma di --preview [s].")
+parser.add_argument("--preview", action="store_true", help="Salva solo i fotogrammi di --preview_at ed esce.")
+parser.add_argument("--preview_at", type=float, nargs="+", default=[2.0],
+                    help="Istanti dei fotogrammi di --preview, nel tempo del video (dopo il preroll) [s]: lo stesso "
+                         "fotogramma che il video avrebbe a quell'istante. Con piu' istanti i file finiscono in _t<s>.")
 cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -343,8 +417,12 @@ def build_env_cfg(preset: dict, args, log: list):
             set_path(env_cfg, path, value, log)
     for path, value in preset["mods"]:
         set_path(env_cfg, path, value, log)
+    crowd = None if single else (args.crowd or preset.get("crowd"))
+    if crowd:
+        for path, value in CROWD[crowd]:
+            set_path(env_cfg, path, value, log)
 
-    hold = (args.heading_hold or ("on" if preset.get("hold") else "off")) == "on"
+    hold =(args.heading_hold or ("on" if preset.get("hold") else "off")) == "on"
     if hold:
         for path, value in heading_hold(args.heading_stiffness):
             set_path(env_cfg, path, value, log)
@@ -382,14 +460,105 @@ def build_env_cfg(preset: dict, args, log: list):
     res = tuple(args.resolution) if args.resolution else preset.get("res", (1920, 1080))
     set_path(env_cfg, "viewer.resolution", res, log)
     set_path(env_cfg, "viewer.origin_type", "world", log)  # la camera la muove lo script
-    return env_cfg, dr, arrows
+    return env_cfg, dr, arrows, crowd
 
 
 # --------------------------------------------------------------------------------------------------
 # camera
 # --------------------------------------------------------------------------------------------------
+PITCH_MAX = math.radians(89.5)  # "zenitale": a 90 esatti la vista coincide con l'asse su e il look-at non e' definito
+FOCUS_INF = 1.0e4  # [m] fuoco "all'infinito"
+
+
+def _smooth(x):
+    """smoothstep su [0, 1]: velocita' nulla agli estremi."""
+    x = min(max(x, 0.0), 1.0)
+    return x * x * (3.0 - 2.0 * x)
+
+
+def _smoother(x):
+    """smootherstep su [0, 1]: anche l'accelerazione e' nulla agli estremi."""
+    x = min(max(x, 0.0), 1.0)
+    return x * x * x * (x * (6.0 * x - 15.0) + 10.0)
+
+
+def _view_dir(yaw, pitch):
+    """Versore di vista da imbardata e beccheggio [rad]; beccheggio positivo = verso il basso."""
+    return np.array([math.cos(pitch) * math.cos(yaw), math.cos(pitch) * math.sin(yaw), -math.sin(pitch)])
+
+
+def _angles(v):
+    """(imbardata, beccheggio verso il basso) di un vettore."""
+    return math.atan2(v[1], v[0]), math.atan2(-v[2], math.hypot(v[0], v[1]))
+
+
+def traj_pose(kind: str, P: dict, u: float):
+    """(occhio, bersaglio) della traiettoria `kind` alla frazione u in [0, 1] della durata, rispetto al centro
+    della griglia. Funzione pura (solo numpy): si prova senza Isaac Sim."""
+    u = min(max(u, 0.0), 1.0)
+    if kind == "reveal":
+        center = np.array([0.0, 0.0, P["look_z"]])
+        y_back = P["y0"] - P["back"]
+        if u <= P["dolly"]:
+            s = _smooth(u / P["dolly"])
+            return np.array([P["x0"], P["y0"] + (y_back - P["y0"]) * s, P["z0"]]), center
+        # salita: imbardata quella con cui la carrellata guardava il centro, beccheggio da li' allo zenit
+        s = (u - P["dolly"]) / P["rise"]
+        start = np.array([P["x0"], y_back, P["z0"]])
+        yaw, pitch0 = _angles(center - start)
+        k = _smooth(s)  # frazione della salita in metri
+        z = P["z0"] + (P["z_top"] - P["z0"]) * k
+        lz = math.log(z / P["z0"]) / math.log(P["z_top"] / P["z0"]) if P["z_top"] > P["z0"] else 1.0
+        pitch = pitch0 + (PITCH_MAX - pitch0) * _smooth(lz)  # segue la quota in scala logaritmica
+        eye = np.array([*(start[:2] * (1.0 - k)), z])  # torna sopra il centro mentre sale (10 m su 150)
+        return eye, eye + _view_dir(yaw, pitch) * max(float(np.linalg.norm(center - eye)), 1.0)
+    if kind == "trench":
+        yaw0, pitch0 = math.pi / 2, math.atan2(P["drop"], P["ahead"])  # lungo +y, appena verso il basso
+        if u <= P["run"]:
+            eye = np.array([P["x"], P["y0"] * (1.0 - u / P["run"]), P["z0"]])
+            return eye, eye + _view_dir(yaw0, pitch0) * P["ahead"]
+        # da y = 0: y(s) = dy (1 - (1 - s)^3), con dy scelto perche' la velocita' iniziale sia quella della corsa
+        s = min((u - P["run"]) / P["lift"], 1.0)
+        dy = -P["y0"] * P["lift"] / (3.0 * P["run"])
+        eye = np.array([P["x"], dy * (1.0 - (1.0 - s) ** 3), P["z0"] + (P["z_top"] - P["z0"]) * _smooth(s)])
+        to_c = np.array([P["corner_x"], P["corner_y"], P["corner_z"]]) - eye
+        yaw_c, pitch_c = _angles(to_c)
+        w = _smooth(s)
+        yaw = yaw0 + w * ((yaw_c - yaw0 + math.pi) % (2.0 * math.pi) - math.pi)  # pan dal corridoio all'angolo
+        pitch = pitch0 + w * (pitch_c - pitch0)
+        return eye, eye + _view_dir(yaw, pitch) * (P["ahead"] + w * (float(np.linalg.norm(to_c)) - P["ahead"]))
+    if kind == "spiral":
+        e = _smooth(u)  # raggio, elevazione e azimut avanzano insieme: lineari fra loro, dolci nel tempo
+        r = P["r0"] + (P["r1"] - P["r0"]) * e
+        el = math.radians(P["elev0"] + (P["elev1"] - P["elev0"]) * e)
+        a = math.radians(P["azim0"] + P["turn"] * e)
+        look = np.array([P["cx"], P["cy"], P["look_z"]])
+        return look + r * np.array([math.cos(el) * math.cos(a), math.cos(el) * math.sin(a), math.sin(el)]), look
+    if kind == "sweep":
+        s = _smooth(u)
+        eye = np.array([P["x0"] + (P["x1"] - P["x0"]) * s, P["y0"] + (P["y1"] - P["y0"]) * s, P["z"]])
+        return eye, np.array([P["look_x"], P["look_y"], P["look_z"]])
+    raise ValueError(f"traiettoria sconosciuta: {kind}")
+
+
+def traj_focus(P: dict, u: float) -> float:
+    """Distanza di fuoco [m]: focus_near fino a focus_from, infinito da focus_to, in mezzo lineare in 1/d."""
+    w = _smooth((u - P["focus_from"]) / max(P["focus_to"] - P["focus_from"], 1e-6))
+    inv = (1.0 - w) / P["focus_near"]
+    return FOCUS_INF if inv <= 1.0 / FOCUS_INF else 1.0 / inv
+
+
+def corridor_x(xs, x_req: float) -> float:
+    """Il corridoio (meta' fra due file adiacenti di robot) piu' vicino a x_req; xs = x delle file."""
+    xs = np.unique(np.round(np.asarray(xs, dtype=float), 3))
+    if len(xs) < 2:
+        return float(x_req)
+    mids = 0.5 * (xs[:-1] + xs[1:])
+    return float(mids[np.argmin(np.abs(mids - x_req))])
+
+
 class Camera:
-    def __init__(self, base_env, cam: dict, args):
+    def __init__(self, base_env, cam: dict, args, duration: float | None = None):
         self.sim = base_env.sim
         self.robot = base_env.scene["robot"]
         self.p = dict(cam)
@@ -400,17 +569,41 @@ class Camera:
         self.alpha = base_env.step_dt / max(args.cam_smooth + base_env.step_dt, 1e-6)
         self.xy = None
         self.eye = self.look = None
+        self.focus = None
         self.usd_cam = None
-        if args.fstop > 0:  # profondita' di campo: f-stop fisso, fuoco aggiornato sul bersaglio
+        self.fstop = args.fstop if args.fstop is not None else self.p.get("fstop", 0.0)
+        if self.fstop > 0:  # profondita' di campo: f-stop fisso, fuoco aggiornato a ogni fotogramma
             import omni.usd
             from pxr import UsdGeom
 
             prim = omni.usd.get_context().get_stage().GetPrimAtPath(base_env.cfg.viewer.cam_prim_path)
             self.usd_cam = UsdGeom.Camera(prim)
-            self.usd_cam.GetFStopAttr().Set(float(args.fstop))
+            self.usd_cam.GetFStopAttr().Set(float(self.fstop))
         if args.orbit_period is not None:
             self.p["period"] = args.orbit_period
         self.t = 0.0
+        if self.p["mode"] == "traj":
+            self.P = dict(TRAJ_DEFAULTS[self.p["traj"]])
+            for kv in args.traj or []:
+                k, _, v = kv.partition("=")
+                if k not in self.P:
+                    raise SystemExit(f"[media] --traj: '{k}' non e' un parametro di '{self.p['traj']}' "
+                                     f"(validi: {', '.join(self.P)})")
+                self.P[k] = float(v)
+            self.T = float(duration or 1.0)
+            o = base_env.scene.env_origins.cpu().numpy()
+            self.c = np.array([*o[:, :2].mean(axis=0), 0.0])
+            xs = np.unique(np.round(o[:, 0] - self.c[0], 3))
+            side = float(xs[-1] - xs[0]) + (float(np.diff(xs).min()) if len(xs) > 1 else 0.0)
+            if abs(side - 160.0) > 10.0:
+                print(f"[media] ATTENZIONE: le traiettorie sono scritte per una griglia di 160 m (4096 robot a 2.5 m), "
+                      f"questa e' di {side:.0f} m")
+            if self.p["traj"] == "trench":
+                x_req = self.P["x"]
+                self.P["x"] = corridor_x(xs, x_req)
+                print(f"[media] trench: corridoio a x = {self.P['x']:+.2f} m (chiesto {x_req:+.2f})")
+        elif args.traj:
+            print("[media] --traj ignorato: il preset non ha una camera 'traj'")
         if self.p["mode"] == "orbit":
             c = base_env.scene.env_origins.cpu().numpy().mean(axis=0)
             self.look = np.array([c[0], c[1], self.p["look_z"]])  # il centro della circonferenza
@@ -430,6 +623,11 @@ class Camera:
         """t = tempo dall'inizio del video [s]; serve solo all'orbita (None = l'ultimo ricevuto)."""
         if t is not None:
             self.t = t
+        if self.p["mode"] == "traj":
+            u = self.t / self.T
+            eye, look = traj_pose(self.p["traj"], self.P, u)
+            self.eye, self.look = self.c + eye, self.c + look
+            self.focus = traj_focus(self.P, u)
         if self.p["mode"] == "orbit":
             e = math.radians(self.p["elev"])
             a = math.radians(self.p["azim"] + 360.0 * self.t / self.p["period"])
@@ -442,12 +640,32 @@ class Camera:
             self.look = np.array([self.xy[0], self.xy[1], self.p["look_z"]])
             self.eye = np.array([self.xy[0] + self.p["dist"] * math.cos(a),
                                  self.xy[1] + self.p["dist"] * math.sin(a), self.p["eye_z"]])
+        if self.p["mode"] != "traj":
+            self.focus = float(np.linalg.norm(self.eye - self.look))  # fuoco sul bersaglio
         self.sim.set_camera_view(tuple(float(v) for v in self.eye), tuple(float(v) for v in self.look))
         if self.usd_cam is not None:
-            self.usd_cam.GetFocusDistanceAttr().Set(float(np.linalg.norm(self.eye - self.look)))
+            self.usd_cam.GetFocusDistanceAttr().Set(float(self.focus))
+
+    def calib_view(self):
+        """Inquadratura su cui calibrare il colore del pavimento: quella della camera, tranne per le
+        traiettorie, che partono anche radenti al suolo (dove il riflesso schiarisce il pavimento): li' una
+        vista obliqua come V6 (16 m, 35 deg), cosi' il grigio e' lo stesso degli altri video."""
+        if self.p["mode"] != "traj":
+            return self.eye, self.look
+        look = self.c + np.array([0.0, 0.0, 0.5])
+        e, a = math.radians(35.0), math.radians(self.p["azim"])
+        return look + 16.0 * np.array([math.cos(e) * math.cos(a), math.cos(e) * math.sin(a), math.sin(e)]), look
+
+    def row(self):
+        """t, occhio, bersaglio e fuoco: una riga del <video>_camera.csv."""
+        return [round(self.t, 4), *map(float, self.eye), *map(float, self.look), float(self.focus)]
 
     def describe(self):
-        return {**self.p, "eye": [round(float(v), 3) for v in self.eye], "lookat": [round(float(v), 3) for v in self.look]}
+        d = {**self.p, "fstop": self.fstop or None, "eye": [round(float(v), 3) for v in self.eye],
+             "lookat": [round(float(v), 3) for v in self.look]}
+        if self.p["mode"] == "traj":
+            d.update(parametri=self.P, durata_s=self.T, centro=[round(float(v), 3) for v in self.c])
+        return d
 
 
 def srgb_to_lin(c):
@@ -536,7 +754,8 @@ def calibrate_floor(base, cam, shader, target_srgb, settle, iters: int = 6) -> d
     target_lin = srgb_to_lin(target / 255.0)
     c = target_lin.copy()  # primo tentativo: albedo = colore voluto
     off = np.array([500.0, 500.0, 0.0])
-    base.sim.set_camera_view(tuple(float(v) for v in cam.eye + off), tuple(float(v) for v in cam.look + off))
+    eye, look = cam.calib_view()
+    base.sim.set_camera_view(tuple(float(v) for v in eye + off), tuple(float(v) for v in look + off))
     steps, meas = [], target
     for _ in range(iters):
         set_input(shader, "inputs:diffuse_color_constant", Sdf.ValueTypeNames.Color3f, Gf.Vec3f(*map(float, c)))
@@ -731,7 +950,7 @@ def git_commit() -> str | None:
 def main():
     preset = PRESETS[args_cli.preset]
     log: list[str] = []
-    env_cfg, dr, arrows = build_env_cfg(preset, args_cli, log)
+    env_cfg, dr, arrows, crowd = build_env_cfg(preset, args_cli, log)
 
     # V3: sequenza di quote. La prima va nel range PRIMA di creare l'env, perche' il reset iniziale
     # campiona subito il comando; le successive si impostano nel loop appena prima di ogni resample.
@@ -777,7 +996,7 @@ def main():
         robot_root = env_cfg.scene.robot.prim_path.replace("{ENV_REGEX_NS}", "/World/envs/env_0")
         recolored = recolor_robot(robot_root.replace("env_.*", "env_0"), args_cli.robot_color,
                                   args_cli.robot_roughness, args_cli.robot_metallic)
-    cam = Camera(base, preset["cam"], args_cli)
+    cam = Camera(base, preset["cam"], args_cli, duration=args_cli.duration or preset.get("duration"))
     vel_term = base.command_manager.get_term("base_velocity")
     robot = base.scene["robot"]
 
@@ -817,7 +1036,9 @@ def main():
 
     preroll = int(round(preset["preroll"] / dt))
     if args_cli.preview:
-        total, kind = int(round(args_cli.preview_at / dt)), "preview"
+        # istanti nel tempo del video: il fotogramma al passo i e' quello del video a (i - preroll + 1) * dt
+        previews = {max(preroll + int(round(t / dt)) - 1, 0): t for t in args_cli.preview_at}
+        total, kind = max(previews) + 1, "preview"
     elif preset["kind"] == "stills":
         times = args_cli.times or list(preset["times"])
         shots = {int(round(t / dt)): k for k, t in enumerate(times, start=1)}
@@ -830,6 +1051,7 @@ def main():
     push_every = int(round(preset["push_interval"] / dt)) if "push_interval" in preset else None
     pushes, files, residual = [], [], []
     tele = []  # V3-V5: comando e stato misurato del robot a ogni fotogramma (-> <video>_telemetria.csv)
+    track = []  # V7: posa e fuoco della camera a ogni fotogramma (-> <video>_camera.csv)
     h_term = base.command_manager.get_term("base_height")
     rng = np.random.default_rng(args_cli.seed)
     writer = None
@@ -873,6 +1095,8 @@ def main():
                 if i == preroll:
                     settle(8)  # scartati: niente fotogramma vecchio o mezzo mediato in apertura
                 writer.write(base.render())
+                if cam.p["mode"] == "traj":
+                    track.append(cam.row())
                 if base.num_envs == 1:
                     c = vel_term.command[0].tolist()
                     v = robot.data.root_lin_vel_b[0].tolist()
@@ -895,12 +1119,16 @@ def main():
             flag = "  <-- frecce ancora visibili: aumenta --settle_toggle" if res_off > 0.02 * max(res_on, 1) else ""
             print(f"[media] scatto {k}: pixel delle frecce {res_on} -> nello scatto pulito {res_off}{flag}")
             files += [on.name, off.name]
+        elif kind == "preview" and i in previews:
+            suffix = "" if args_cli.ground == "grid" else f"_{args_cli.ground}"  # anteprime confrontabili
+            tag = f"_t{previews[i]:g}" if len(previews) > 1 else ""
+            p = out_dir / f"_preview_{args_cli.preset}{suffix}{tag}.png"
+            save_png(settle(args_cli.settle), p)
+            files.append(p.name)
+            if cam.p["mode"] == "traj":
+                print(f"[media]   t {previews[i]:g} s: camera {np.round(cam.eye, 2).tolist()} -> "
+                      f"{np.round(cam.look, 2).tolist()}, fuoco {cam.focus:.1f} m")
 
-    if kind == "preview":
-        suffix = "" if args_cli.ground == "grid" else f"_{args_cli.ground}"  # anteprime confrontabili
-        p = out_dir / f"_preview_{args_cli.preset}{suffix}.png"
-        save_png(settle(args_cli.settle), p)
-        files.append(p.name)
     tele_summary = None
     if tele:
         cols = ["t", "cmd_vx", "cmd_vy", "cmd_wz", "cmd_h", "vx_b", "vy_b", "wz_b", "yaw_deg", "x", "y", "z"]
@@ -921,6 +1149,11 @@ def main():
         print(f"[media] telemetria: comando {tele_summary['comando_medio']}, misurato {tele_summary['misurato_medio']}, "
               f"rotazione {tele_summary['rotazione_totale_deg']} deg, spostamento netto {tele_summary['spostamento_netto_m']} m")
         files.append(csv_path.name)
+    if track:
+        cam_csv = out_dir / f"{files[0].rsplit('.', 1)[0]}_camera.csv"
+        np.savetxt(cam_csv, np.array(track), delimiter=",", comments="", fmt="%.4f",
+                   header="t,eye_x,eye_y,eye_z,look_x,look_y,look_z,fuoco_m")
+        files.append(cam_csv.name)
     if writer:
         writer.close()
 
@@ -933,7 +1166,7 @@ def main():
         "aspetto": args_cli.look, "sole": sun, "shader_robot_modificati": recolored,
         "robot": None if args_cli.look != "tesi" else {"albedo": args_cli.robot_color, "roughness": args_cli.robot_roughness,
                                                       "metallic": args_cli.robot_metallic},
-        "fstop": args_cli.fstop or None,
+        "fstop": cam.fstop or None, "folla": crowd,
         "camera": cam.describe(), "focale_mm": args_cli.focal_length, "pavimento": ground,
         "calibrazione_pavimento": floor_cal,
         "scala_frecce": args_cli.arrow_scale, "rendering_mode": getattr(args_cli, "rendering_mode", None),
