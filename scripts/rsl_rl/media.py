@@ -116,6 +116,24 @@ def crouch_walk(vx, vy, wz):
     ]
 
 
+# HEADING_HOLD. La policy insegue la VELOCITA' di imbardata, non la direzione: un errore di velocita'
+# si integra in un errore di direzione che nessuno corregge. Camminando di lato a mezzo squat c'e' anche
+# un accoppiamento laterale -> imbardata. Misurato in MuJoCo sulla policy finale (sim_2026-09-14_01-09-57,
+# 0.74 m): vy +0.3 comandato -> 0.14 m/s e +0.13 rad/s di imbardata non comandata, +54 deg in 7 s;
+# deriva ~ 0.8 - 4.5*vx + 11.2*vy deg/s. Nel primo V4b (media_1) il robot girava in tondo su ~1 m.
+# Il rimedio e' quello dell'operatore col joystick: correggere la rotta. Isaac Lab lo ha gia' nel
+# generatore di comandi (heading_command): wz = clip(k * errore di direzione, ang_vel_z). La policy vede
+# solo un comando di imbardata piccolo e dentro il range di training (+-0.5 rad/s).
+def heading_hold(k):
+    return [
+        ("commands.base_velocity.heading_command", True),
+        ("commands.base_velocity.rel_heading_envs", 1.0),
+        ("commands.base_velocity.heading_control_stiffness", k),
+        ("commands.base_velocity.ranges.heading", (YAW_MINUS_X, YAW_MINUS_X)),  # la direzione del reset
+        ("commands.base_velocity.ranges.ang_vel_z", (-0.5, 0.5)),  # limite della correzione = range di training
+    ]
+
+
 SINGLE = dict(num_envs=1, preroll=1.0, dr=False)
 PRESETS = {
     "S1": dict(kind="stills", name="S1_envs", num_envs=32, spacing=4.0, res=(3840, 2160), preroll=0.0,
@@ -130,9 +148,10 @@ PRESETS = {
                mods=STANDING + [("commands.base_height.ranges.height", (0.60, 0.98)),
                                 ("commands.base_height.resampling_time_range", (4.0, 4.0)),
                                 ("events.push_robot", None)]),
-    "V4a": dict(kind="video", name="V4a_crouch_avanti", duration=30.0, cam=CAM_SIDE, arrows="on", **SINGLE,
+    # hold: controllo di rotta (vedi HEADING_HOLD). Solo dove la direzione deve restare fissa; V4c ruota.
+    "V4a": dict(kind="video", name="V4a_crouch_avanti", duration=30.0, cam=CAM_SIDE, arrows="on", hold=True, **SINGLE,
                 mods=crouch_walk(0.5, 0.0, 0.0)),
-    "V4b": dict(kind="video", name="V4b_crouch_laterale", duration=30.0, cam=CAM_FRONT, arrows="on", **SINGLE,
+    "V4b": dict(kind="video", name="V4b_crouch_laterale", duration=30.0, cam=CAM_FRONT, arrows="on", hold=True, **SINGLE,
                 mods=crouch_walk(0.0, 0.3, 0.0)),
     "V4c": dict(kind="video", name="V4c_crouch_rotazione", duration=30.0, cam=CAM_SIDE, arrows="on", **SINGLE,
                 mods=crouch_walk(0.0, 0.0, 0.5)),
@@ -164,6 +183,14 @@ parser.add_argument("--push", choices=("train", "alternate"), default="train",
                     help="V5: 'train' = x,y uniformi in +-push_speed come in training; 'alternate' = "
                          "+-push_speed lungo x a segni alterni (la direzione che si vede di lato).")
 parser.add_argument("--push_speed", type=float, default=0.5, help="V5: ampiezza delle spinte [m/s].")
+parser.add_argument("--heading_hold", choices=("on", "off"), default=None,
+                    help="Controllo di rotta nel generatore di comandi (default: on per V4a e V4b). 'off' mostra la "
+                         "policy a comando di imbardata nullo, con la sua deriva.")
+parser.add_argument("--heading_stiffness", type=float, default=4.0,
+                    help="Guadagno del controllo di rotta [rad/s per rad]. Simulato con i valori misurati a mezzo "
+                         "squat (risposta in imbardata 0.42, deriva 0.13 rad/s, ritardo 0.1-0.2 s): con 4.0 errore "
+                         "a regime 3-5 deg e comando massimo 0.35 rad/s; col default di Isaac Lab (0.5) 35 deg; "
+                         "da 10 in su il comando satura e oscilla. Senza controllo, 223 deg in 30 s.")
 parser.add_argument("--cam_dist", type=float, default=None)
 parser.add_argument("--cam_elev", type=float, default=None, help="Camere 'grid': elevazione [deg].")
 parser.add_argument("--cam_azim", type=float, default=None, help="Direzione della camera [deg], 0 = +x.")
@@ -290,6 +317,11 @@ def build_env_cfg(preset: dict, args, log: list):
             set_path(env_cfg, path, value, log)
     for path, value in preset["mods"]:
         set_path(env_cfg, path, value, log)
+
+    hold = (args.heading_hold or ("on" if preset.get("hold") else "off")) == "on"
+    if hold:
+        for path, value in heading_hold(args.heading_stiffness):
+            set_path(env_cfg, path, value, log)
 
     dr = (args.dr or ("on" if preset["dr"] else "off")) == "on"
     if not dr:
@@ -757,6 +789,8 @@ def main():
     seg = int(round(preset.get("segment", 4.0) / dt))
     push_every = int(round(preset["push_interval"] / dt)) if "push_interval" in preset else None
     pushes, files, residual = [], [], []
+    tele = []  # V3-V5: comando e stato misurato del robot a ogni fotogramma (-> <video>_telemetria.csv)
+    h_term = base.command_manager.get_term("base_height")
     rng = np.random.default_rng(args_cli.seed)
     writer = None
     if kind == "video":
@@ -795,6 +829,13 @@ def main():
                 if i == preroll:
                     settle(8)  # scartati: niente fotogramma vecchio o mezzo mediato in apertura
                 writer.write(base.render())
+                if base.num_envs == 1:
+                    c = vel_term.command[0].tolist()
+                    v = robot.data.root_lin_vel_b[0].tolist()
+                    w = robot.data.root_ang_vel_b[0].tolist()
+                    pos = robot.data.root_pos_w[0].tolist()
+                    tele.append([round((i - preroll + 1) * dt, 3), *c, float(h_term.command[0, 0]), v[0], v[1], w[2],
+                                 math.degrees(float(robot.data.heading_w[0])), *pos])
         elif kind == "stills" and i in shots:
             k = shots[i]
             on = out_path(out_dir, f"{preset['name']}_frecce_{k}", ".png", args_cli.overwrite)
@@ -816,6 +857,26 @@ def main():
         p = out_dir / f"_preview_{args_cli.preset}{suffix}.png"
         save_png(settle(args_cli.settle), p)
         files.append(p.name)
+    tele_summary = None
+    if tele:
+        cols = ["t", "cmd_vx", "cmd_vy", "cmd_wz", "cmd_h", "vx_b", "vy_b", "wz_b", "yaw_deg", "x", "y", "z"]
+        T = np.array(tele)
+        csv_path = out_dir / f"{files[0].rsplit('.', 1)[0]}_telemetria.csv"
+        np.savetxt(csv_path, T, delimiter=",", header=",".join(cols), comments="", fmt="%.5f")
+        k = {c: j for j, c in enumerate(cols)}
+        yaw = np.unwrap(np.radians(T[:, k["yaw_deg"]]))
+        mean = lambda c: round(float(T[:, k[c]].mean()), 3)
+        tele_summary = {
+            "csv": csv_path.name,
+            "comando_medio": {"vx": mean("cmd_vx"), "vy": mean("cmd_vy"), "wz": mean("cmd_wz"), "h": mean("cmd_h")},
+            "misurato_medio": {"vx": mean("vx_b"), "vy": mean("vy_b"), "wz": mean("wz_b"), "z_base": mean("z")},
+            "rotazione_totale_deg": round(float(np.degrees(yaw[-1] - yaw[0])), 1),
+            "spostamento_netto_m": round(float(np.hypot(T[-1, k["x"]] - T[0, k["x"]], T[-1, k["y"]] - T[0, k["y"]])), 2),
+            "percorso_m": round(float(np.hypot(np.diff(T[:, k["x"]]), np.diff(T[:, k["y"]])).sum()), 2),
+        }
+        print(f"[media] telemetria: comando {tele_summary['comando_medio']}, misurato {tele_summary['misurato_medio']}, "
+              f"rotazione {tele_summary['rotazione_totale_deg']} deg, spostamento netto {tele_summary['spostamento_netto_m']} m")
+        files.append(csv_path.name)
     if writer:
         writer.close()
 
@@ -835,6 +896,9 @@ def main():
         "render_di_riscaldamento": n_warm, "modifiche_config": log,
         "spinte": {"modo": args_cli.push, "ogni_s": preset["push_interval"], "eventi": pushes} if push_every else None,
         "controllo_frecce": residual or None,
+        "controllo_di_rotta": {"k": args_cli.heading_stiffness}
+        if (args_cli.heading_hold or ("on" if preset.get("hold") else "off")) == "on" else None,
+        "telemetria": tele_summary,
     }
     if kind == "stills":
         meta_path = out_path(out_dir, preset["name"], ".json", args_cli.overwrite)
