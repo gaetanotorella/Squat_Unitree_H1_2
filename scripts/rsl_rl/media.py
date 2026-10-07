@@ -39,7 +39,22 @@ Per i preset a un robot (V3-V5), inoltre:
   * curriculum spenti, randomizzazioni fisiche spente (--dr on per riaccenderle): robot nominale;
   * camera che segue solo x/y del robot, ad altezza fissa (non sale e scende con lo squat).
 
-Le opzioni --cam_* e --focal_length ritoccano l'inquadratura senza toccare il codice.
+Aspetto (--look): 'tesi' (default) = robot nero satinato, pavimento con le piastrelle chiare del
+training, sole con ombre nette dietro il soggetto a destra (come la foto di riferimento), cielo
+uniforme chiaro; 'isaac' = scena di default di Isaac Lab. Luce e robot si regolano con --sun_*,
+--sky_intensity, --robot_*; --fstop accende la profondita' di campo.
+
+Le opzioni --cam_* e --focal_length ritoccano l'inquadratura senza toccare il codice; --ground sceglie
+il pavimento (grid = default di Isaac Lab, grey = grigio uniforme, marble = piastrelle del training);
+--arrow_scale ingrandisce le frecce.
+
+Resa (dal primo giro di test, 2026-10-07):
+  * prima di iniziare si renderizza finche' l'immagine smette di cambiare: materiali e cielo si
+    caricano in background, e il primo fotogramma dei video era la scena non ancora caricata;
+  * il renderer media ogni fotogramma con i precedenti: gli scatti fermi usano --settle render, e la
+    versione pulita di S1 --settle_toggle render dopo aver spento le frecce (con 16 ne restava un
+    fantasma al ~10%); lo script conta i pixel nei colori delle frecce e avvisa se ne restano;
+  * camere dal lato del sole (vedi LUCE): la prima camera laterale era in controluce.
 """
 
 """Launch Isaac Sim Simulator first."""
@@ -54,12 +69,19 @@ import cli_args  # isort: skip
 FINAL_RUN = "2026-09-13_21-27-39"
 
 # camere: "grid" = fissa, obliqua sul centro della griglia; "follow" = segue x/y del robot 0.
-# azim: direzione IN CUI sta la camera rispetto al bersaglio (0 = +x davanti al robot, -90 = -y, cioe'
-# alla destra del robot: si vede il fianco destro e il robot avanza verso destra nell'immagine).
-CAM_GRID_32 = dict(mode="grid", dist=16.0, elev=35.0, azim=225.0, look_z=0.5)
-CAM_GRID_4096 = dict(mode="grid", dist=130.0, elev=30.0, azim=225.0, look_z=0.0)
-CAM_SIDE = dict(mode="follow", dist=3.5, azim=-90.0, eye_z=1.0, look_z=0.85)
-CAM_FRONT = dict(mode="follow", dist=3.5, azim=0.0, eye_z=1.0, look_z=0.85)
+# azim: direzione IN CUI sta la camera rispetto al bersaglio (0 = +x, 90 = +y).
+# LUCE: la scena ha solo la cupola con il cielo HDR; dalle ombre dei primi test il sole sta dal lato
+# +y / -x (azimut ~110-135 deg). Le camere stanno quindi da quel lato, col sole alle spalle: con la
+# camera laterale a -y (primo test) il robot era in controluce, una sagoma scura contro il cielo.
+# I robot dei preset singoli guardano verso -x (yaw = pi): con la camera laterale a +y avanzano
+# comunque verso DESTRA nell'immagine.
+# frac (solo "grid"): dove sta il bersaglio, come frazione della distanza centro -> bordo della griglia
+# dal lato della camera. 0 = centro; V1 a 0.8 guarda vicino all'angolo: i robot in primo piano si
+# riconoscono e la griglia continua fino all'orizzonte (a 130 m dal centro erano puntini).
+CAM_GRID_32 = dict(mode="grid", dist=16.0, elev=35.0, azim=135.0, look_z=0.5, frac=0.0)
+CAM_GRID_4096 = dict(mode="grid", dist=30.0, elev=22.0, azim=135.0, look_z=0.8, frac=0.8)
+CAM_SIDE = dict(mode="follow", dist=3.8, azim=90.0, eye_z=1.4, look_z=0.8)
+CAM_FRONT = dict(mode="follow", dist=3.8, azim=180.0, eye_z=1.4, look_z=0.8)
 
 # Gruppi di modifiche alla configurazione: (percorso puntato, valore). Un percorso che non esiste
 # ferma lo script con un errore: un nome sbagliato non deve passare in silenzio.
@@ -68,7 +90,9 @@ STANDING = [
     ("commands.base_velocity.debug_vis", False),
 ]
 NO_CURRICULUM = [("curriculum.lin_vel_cmd_levels", None), ("curriculum.height_cmd_levels", None)]
-FIXED_RESET = [("events.reset_base.params.pose_range", {"x": (0.0, 0.0), "y": (0.0, 0.0), "yaw": (0.0, 0.0)})]
+YAW_MINUS_X = 3.141592653589793  # robot rivolto verso -x (vedi LUCE sopra)
+FIXED_RESET = [("events.reset_base.params.pose_range",
+                {"x": (0.0, 0.0), "y": (0.0, 0.0), "yaw": (YAW_MINUS_X, YAW_MINUS_X)})]
 NO_DR = [
     ("events.physics_material", None),
     ("events.add_base_mass", None),
@@ -94,7 +118,8 @@ def crouch_walk(vx, vy, wz):
 SINGLE = dict(num_envs=1, preroll=1.0, dr=False)
 PRESETS = {
     "S1": dict(kind="stills", name="S1_envs", num_envs=32, spacing=4.0, res=(3840, 2160), preroll=0.0,
-               dr=True, cam=CAM_GRID_32, arrows="both", times=(3.0, 4.0, 5.0, 6.5, 8.0), mods=[]),
+               # presto: a 8 s (primo test) chi cammina ha gia' lasciato la griglia e i robot si incrociano
+               dr=True, cam=CAM_GRID_32, arrows="both", times=(2.5, 3.0, 3.5, 4.0, 5.0), mods=[]),
     "V1": dict(kind="video", name="V1_scala", num_envs=4096, spacing=2.5, duration=12.0, preroll=1.0,
                dr=True, cam=CAM_GRID_4096, arrows="off", mods=[]),
     "V2": dict(kind="video", name="V2_misti", num_envs=32, spacing=4.0, duration=18.0, preroll=1.0,
@@ -145,7 +170,33 @@ parser.add_argument("--cam_eye_z", type=float, default=None, help="Camere 'follo
 parser.add_argument("--cam_look_z", type=float, default=None, help="Altezza del punto inquadrato [m].")
 parser.add_argument("--cam_smooth", type=float, default=0.4, help="Camere 'follow': costante di tempo [s].")
 parser.add_argument("--focal_length", type=float, default=None, help="Focale della camera [mm] (default Kit 18.1).")
-parser.add_argument("--settle", type=int, default=16, help="Render ripetuti sullo stesso stato per un'immagine ferma.")
+parser.add_argument("--look", choices=("tesi", "isaac"), default="tesi",
+                    help="'tesi' = robot nero, pavimento chiaro, sole con ombre nette e cielo uniforme; "
+                         "'isaac' = scena di default (cielo HDR, robot grigi).")
+parser.add_argument("--ground", choices=("grid", "grey", "marble"), default=None,
+                    help="Pavimento: 'grid' = piano di default (nero a griglia), 'grey' = grigio opaco uniforme, "
+                         "'marble' = le piastrelle chiare del terreno di training. Default: marble con --look "
+                         "tesi, grid con --look isaac.")
+parser.add_argument("--robot_color", type=float, default=0.02, help="--look tesi: albedo del robot (lineare, 0-1).")
+parser.add_argument("--robot_roughness", type=float, default=0.45)
+parser.add_argument("--robot_metallic", type=float, default=0.2)
+parser.add_argument("--sun_elev", type=float, default=35.0, help="--look tesi: altezza del sole [deg].")
+parser.add_argument("--sun_rel_azim", type=float, default=135.0,
+                    help="--look tesi: direzione del sole rispetto alla camera [deg]; 135 = dietro il soggetto, "
+                         "a destra nell'immagine (ombre verso la camera, come nella foto di riferimento); "
+                         "45 = alle spalle della camera, a destra.")
+parser.add_argument("--sun_intensity", type=float, default=3000.0)
+parser.add_argument("--sun_angle", type=float, default=0.53, help="Diametro apparente del sole [deg]: ombre nette.")
+parser.add_argument("--sky_intensity", type=float, default=800.0, help="--look tesi: luce diffusa del cielo uniforme.")
+parser.add_argument("--fstop", type=float, default=0.0,
+                    help="Profondita' di campo: f-stop della camera (0 = spenta), fuoco sul bersaglio.")
+parser.add_argument("--ground_shade", type=float, default=0.35, help="--ground grey: grigio del pavimento (0-1).")
+parser.add_argument("--arrow_scale", type=float, default=None, help="Spessore/lunghezza delle frecce (Isaac Lab: 0.5).")
+parser.add_argument("--settle", type=int, default=32, help="Render ripetuti sullo stesso stato per uno scatto fermo.")
+parser.add_argument("--settle_toggle", type=int, default=128,
+                    help="Render dopo aver spento le frecce: il renderer media i fotogrammi e con 16 restava "
+                         "un fantasma delle frecce al ~10%%.")
+parser.add_argument("--warmup", type=int, default=300, help="Massimo di render iniziali per caricare materiali e cielo.")
 parser.add_argument("--preview", action="store_true", help="Salva un solo fotogramma ed esce.")
 parser.add_argument("--preview_at", type=float, default=3.0, help="Istante del fotogramma di --preview [s].")
 cli_args.add_rsl_rl_args(parser)
@@ -245,12 +296,25 @@ def build_env_cfg(preset: dict, args, log: list):
         set_path(env_cfg, "commands.base_velocity.debug_vis", arrows == "on", log)
     else:  # "both": accese, si spengono solo per lo scatto pulito
         set_path(env_cfg, "commands.base_velocity.debug_vis", True, log)
+    if args.arrow_scale:
+        s = float(args.arrow_scale)
+        for vis in ("goal_vel_visualizer_cfg", "current_vel_visualizer_cfg"):
+            getattr(env_cfg.commands.base_velocity, vis).markers["arrow"].scale = (s, s, s)
+        log.append(f"frecce: scala {s:g}")
 
     # episodio piu' lungo del video: niente reset (teletrasporto) a meta' ripresa
     if preset["kind"] == "video":
         need = preset["preroll"] + (args.duration or preset["duration"]) + 2.0
         if env_cfg.episode_length_s < need:
             set_path(env_cfg, "episode_length_s", need, log)
+
+    if args.look == "tesi":
+        # cielo uniforme chiaro al posto dell'HDR: fa da luce diffusa e da sfondo neutro; la luce
+        # direzionale (il sole) si aggiunge dopo la creazione della scena, in add_sun()
+        import isaaclab.sim as sim_utils
+
+        set_path(env_cfg, "scene.sky_light.spawn", sim_utils.DomeLightCfg(
+            intensity=args.sky_intensity, color=(0.86, 0.88, 0.92), texture_file=None), log)
 
     res = tuple(args.resolution) if args.resolution else preset.get("res", (1920, 1080))
     set_path(env_cfg, "viewer.resolution", res, log)
@@ -273,10 +337,22 @@ class Camera:
         self.alpha = base_env.step_dt / max(args.cam_smooth + base_env.step_dt, 1e-6)
         self.xy = None
         self.eye = self.look = None
+        self.usd_cam = None
+        if args.fstop > 0:  # profondita' di campo: f-stop fisso, fuoco aggiornato sul bersaglio
+            import omni.usd
+            from pxr import UsdGeom
+
+            prim = omni.usd.get_context().get_stage().GetPrimAtPath(base_env.cfg.viewer.cam_prim_path)
+            self.usd_cam = UsdGeom.Camera(prim)
+            self.usd_cam.GetFStopAttr().Set(float(args.fstop))
         if self.p["mode"] == "grid":
-            c = base_env.scene.env_origins.mean(dim=0).cpu().numpy()
+            o = base_env.scene.env_origins.cpu().numpy()
+            c = o.mean(axis=0)
             e, a = math.radians(self.p["elev"]), math.radians(self.p["azim"])
-            self.look = np.array([c[0], c[1], self.p["look_z"]])
+            u = np.array([math.cos(a), math.sin(a)])
+            reach = float(((o[:, :2] - c[:2]) @ u).max())  # dal centro al bordo, verso la camera
+            t = c[:2] + self.p.get("frac", 0.0) * reach * u
+            self.look = np.array([t[0], t[1], self.p["look_z"]])
             self.eye = self.look + self.p["dist"] * np.array(
                 [math.cos(e) * math.cos(a), math.cos(e) * math.sin(a), math.sin(e)])
         self.update()
@@ -290,9 +366,126 @@ class Camera:
             self.eye = np.array([self.xy[0] + self.p["dist"] * math.cos(a),
                                  self.xy[1] + self.p["dist"] * math.sin(a), self.p["eye_z"]])
         self.sim.set_camera_view(tuple(float(v) for v in self.eye), tuple(float(v) for v in self.look))
+        if self.usd_cam is not None:
+            self.usd_cam.GetFocusDistanceAttr().Set(float(np.linalg.norm(self.eye - self.look)))
 
     def describe(self):
         return {**self.p, "eye": [round(float(v), 3) for v in self.eye], "lookat": [round(float(v), 3) for v in self.look]}
+
+
+def apply_ground(kind: str, env_cfg, shade: float) -> str:
+    """Materiale del pavimento sopra il piano di default. Il piano di Isaac Lab ('grid') e' nero con
+    una griglia bianca a 1 m: molto contrastato, e in V1 da lontano le linee sfarfallano."""
+    if kind == "grid":
+        return "piano di default (nero a griglia)"
+    import isaaclab.sim as sim_utils
+
+    mat_path = "/World/Looks/media_ground"
+    if kind == "grey":
+        mat = sim_utils.PreviewSurfaceCfg(diffuse_color=(shade, shade, shade), roughness=0.9, metallic=0.0)
+        desc = f"grigio uniforme {shade:g}"
+    else:
+        mat = env_cfg.scene.terrain.visual_material  # lo stesso MDL del terreno di training
+        desc = "piastrelle del training (MDL)"
+    try:
+        mat.func(mat_path, mat)
+        sim_utils.bind_visual_material(env_cfg.scene.terrain.prim_path, mat_path)
+    except Exception as e:  # meglio un'immagine col pavimento di default che un lancio perso
+        print(f"[media] ATTENZIONE: pavimento '{kind}' non applicato ({e}); resta quello di default")
+        return f"piano di default (fallito '{kind}': {e})"
+    return desc
+
+
+def add_sun(cam_azim: float, args) -> dict:
+    """Luce direzionale (il sole) con ombre nette. Una DistantLight illumina lungo il proprio -Z: la si
+    ruota in modo che +Z punti verso il sole. L'azimut e' relativo alla camera, cosi' la luce resta la
+    stessa rispetto all'inquadratura in ogni preset."""
+    import isaaclab.sim as sim_utils
+
+    az, el = math.radians(cam_azim + args.sun_rel_azim), math.radians(args.sun_elev)
+    s = np.array([math.cos(el) * math.cos(az), math.cos(el) * math.sin(az), math.sin(el)])  # verso il sole
+    axis = np.cross([0.0, 0.0, 1.0], s)
+    n = np.linalg.norm(axis)
+    theta = math.acos(float(np.clip(s[2], -1.0, 1.0)))
+    q = (1.0, 0.0, 0.0, 0.0) if n < 1e-9 else (math.cos(theta / 2), *(axis / n * math.sin(theta / 2)))
+    cfg = sim_utils.DistantLightCfg(intensity=args.sun_intensity, angle=args.sun_angle, color=(1.0, 0.95, 0.88))
+    cfg.func("/World/media_sun", cfg, orientation=tuple(float(v) for v in q))
+    return {"azimut_assoluto_deg": round((cam_azim + args.sun_rel_azim) % 360, 1), "elevazione_deg": args.sun_elev,
+            "intensita": args.sun_intensity, "angolo_deg": args.sun_angle, "cielo": args.sky_intensity}
+
+
+def recolor_robot(robot_root: str, color: float, roughness: float, metallic: float) -> int:
+    """Rende il robot nero modificando i materiali CONDIVISI dal modello convertito dall'URDF.
+
+    I robot sono instanziati (una sola geometria per tutti gli env: 550k triangoli a robot, senza
+    instancing 4096 robot sarebbero 2.2 miliardi), e un materiale legato dall'esterno potrebbe non
+    arrivare dentro le istanze. Qui si cambia direttamente lo shader nel layer da cui tutte le istanze
+    lo leggono, solo in memoria: il file convertito su disco non viene salvato.
+    Restituisce quanti shader/mesh sono stati modificati (0 = niente trovato, il robot resta com'e')."""
+    import omni.usd
+    from pxr import Gf, Sdf, Usd, UsdGeom, UsdShade, Vt
+
+    stage = omni.usd.get_context().get_stage()
+    root = stage.GetPrimAtPath(robot_root)
+    if not root.IsValid():
+        print(f"[media] ATTENZIONE: {robot_root} non esiste, robot non ricolorato")
+        return 0
+    rgb = Gf.Vec3f(color, color, color)
+    shaders, meshes = {}, {}
+    for prim in Usd.PrimRange(root, Usd.TraverseInstanceProxies()):
+        if prim.GetTypeName() == "Shader":
+            shaders[str(prim.GetPath())] = prim
+        elif prim.IsA(UsdGeom.Gprim):
+            meshes[str(prim.GetPath())] = prim
+            mat = UsdShade.MaterialBindingAPI(prim).ComputeBoundMaterial()[0]
+            if mat:
+                for p in Usd.PrimRange(mat.GetPrim(), Usd.TraverseInstanceProxies()):
+                    if p.GetTypeName() == "Shader":
+                        shaders[str(p.GetPath())] = p
+
+    def put(spec, name, tname, value):
+        a = spec.attributes[name] if name in spec.attributes else Sdf.AttributeSpec(spec, name, tname)
+        a.default = value
+
+    done, seen = 0, set()
+    for prim in shaders.values():
+        stack = prim.GetPrimStack()
+        if not stack or (stack[0].layer.identifier, stack[0].path) in seen:
+            continue  # stesso shader del prototipo condiviso: basta una volta
+        spec = stack[0]
+        seen.add((spec.layer.identifier, spec.path))
+        sid = UsdShade.Shader(prim).GetIdAttr().Get()
+        src = str(prim.GetAttribute("info:mdl:sourceAsset").Get() or "")
+        if sid == "UsdPreviewSurface":
+            put(spec, "inputs:diffuseColor", Sdf.ValueTypeNames.Color3f, rgb)
+            put(spec, "inputs:roughness", Sdf.ValueTypeNames.Float, roughness)
+            put(spec, "inputs:metallic", Sdf.ValueTypeNames.Float, metallic)
+        elif "OmniPBR" in src or "OmniSurface" in src or src.endswith(".mdl"):
+            put(spec, "inputs:diffuse_color_constant", Sdf.ValueTypeNames.Color3f, rgb)
+            put(spec, "inputs:reflection_roughness_constant", Sdf.ValueTypeNames.Float, roughness)
+            put(spec, "inputs:metallic_constant", Sdf.ValueTypeNames.Float, metallic)
+            if "inputs:diffuse_texture" in spec.attributes:
+                spec.attributes["inputs:diffuse_texture"].default = Sdf.AssetPath("")
+        else:
+            continue
+        done += 1
+    for prim in meshes.values():  # mesh senza materiale: il renderer usa displayColor
+        stack = prim.GetPrimStack()
+        if stack and "primvars:displayColor" in stack[0].attributes:
+            stack[0].attributes["primvars:displayColor"].default = Vt.Vec3fArray([rgb])
+            done += 1
+    print(f"[media] robot ricolorato: {done} shader/mesh modificati ({len(meshes)} mesh nel robot 0)")
+    if done == 0:
+        print("[media] ATTENZIONE: nessun materiale trovato nel robot: resta del colore di default")
+    return done
+
+
+def arrow_pixels(img: np.ndarray) -> int:
+    """Pixel nei colori delle frecce (blu e verde saturi): nello scatto pulito devono essere ~0."""
+    r, g, b = (img[..., k].astype(np.int16) for k in range(3))
+    blue = (b > 120) & (b > r + 60) & (b > g + 60)
+    green = (g > 120) & (g > r + 60) & (g > b + 60)
+    return int((blue | green).sum())
 
 
 def set_focal_length(cam_prim_path: str, f: float):
@@ -414,16 +607,39 @@ def main():
 
     if args_cli.focal_length:
         set_focal_length(env_cfg.viewer.cam_prim_path, args_cli.focal_length)
+    if args_cli.ground is None:
+        args_cli.ground = "marble" if args_cli.look == "tesi" else "grid"
+    ground = apply_ground(args_cli.ground, env_cfg, args_cli.ground_shade)
+    sun, recolored = None, None
+    if args_cli.look == "tesi":
+        cam_azim = args_cli.cam_azim if args_cli.cam_azim is not None else preset["cam"]["azim"]
+        sun = add_sun(cam_azim, args_cli)
+        robot_root = env_cfg.scene.robot.prim_path.replace("{ENV_REGEX_NS}", "/World/envs/env_0")
+        recolored = recolor_robot(robot_root.replace("env_.*", "env_0"), args_cli.robot_color,
+                                  args_cli.robot_roughness, args_cli.robot_metallic)
     cam = Camera(base, preset["cam"], args_cli)
     vel_term = base.command_manager.get_term("base_velocity")
     robot = base.scene["robot"]
 
-    def settle():
-        """Piu' render sullo stesso stato fisico: l'annotatore restituisce l'immagine con un ritardo
-        e l'accumulo temporale del renderer converge. Serve per gli scatti fermi e dopo le frecce."""
-        for _ in range(max(args_cli.settle - 1, 0)):
+    def settle(n: int):
+        """n render sullo stesso stato fisico (render NON avanza la fisica). Servono perche' il renderer
+        media ogni fotogramma con i precedenti e l'annotatore restituisce l'immagine con un fotogramma di
+        ritardo: subito dopo un cambiamento (frecce spente, salto di 1 s) l'immagine e' un misto."""
+        for _ in range(max(n - 1, 0)):
             base.sim.render()
         return base.render()
+
+    def warmup(max_renders: int) -> int:
+        """Render finche' l'immagine smette di cambiare: materiali, cielo e texture si caricano in
+        background. Nel primo test il fotogramma 0 dei video era la scena NON caricata (fondo grigio
+        chiaro, niente pavimento ne' ombre). Restituisce quanti render sono serviti."""
+        means = []
+        for k in range(max_renders):
+            means.append(float(base.render().mean()))
+            if k >= 30 and max(means[-10:]) - min(means[-10:]) < 0.2:
+                return k + 1
+        print(f"[media] ATTENZIONE: dopo {max_renders} render l'immagine cambia ancora (scena non caricata?)")
+        return max_renders
 
     out_dir = Path(args_cli.out) if args_cli.out else REPO / "media_tesi"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -432,7 +648,8 @@ def main():
     if version("rsl-rl-lib").startswith("2.3."):
         obs, _ = env.get_observations()
 
-    settle()  # riscaldamento del renderer prima del primo passo
+    n_warm = warmup(args_cli.warmup)
+    print(f"[media] scena pronta dopo {n_warm} render")
 
     preroll = int(round(preset["preroll"] / dt))
     if args_cli.preview:
@@ -447,7 +664,7 @@ def main():
 
     seg = int(round(preset.get("segment", 4.0) / dt))
     push_every = int(round(preset["push_interval"] / dt)) if "push_interval" in preset else None
-    pushes, files = [], []
+    pushes, files, residual = [], [], []
     rng = np.random.default_rng(args_cli.seed)
     writer = None
     if kind == "video":
@@ -479,21 +696,33 @@ def main():
             obs, _, _, _ = env.step(actions)
         cam.update()
 
-        if kind == "video" and i >= preroll:
-            writer.write(base.render())
+        if kind == "video":
+            if i < preroll:
+                base.sim.render()  # renderer al passo con la scena anche prima di registrare
+            else:
+                if i == preroll:
+                    settle(8)  # scartati: niente fotogramma vecchio o mezzo mediato in apertura
+                writer.write(base.render())
         elif kind == "stills" and i in shots:
             k = shots[i]
             on = out_path(out_dir, f"{preset['name']}_frecce_{k}", ".png", args_cli.overwrite)
-            save_png(settle(), on)
+            img_on = settle(args_cli.settle)
+            save_png(img_on, on)
             vel_term.set_debug_vis(False)
             off = out_path(out_dir, f"{preset['name']}_pulito_{k}", ".png", args_cli.overwrite)
-            save_png(settle(), off)
+            img_off = settle(args_cli.settle_toggle)
+            save_png(img_off, off)
             vel_term.set_debug_vis(True)
+            res_on, res_off = arrow_pixels(img_on), arrow_pixels(img_off)
+            residual.append({"scatto": k, "t": round((i + 1) * dt, 2), "pixel_frecce": res_on, "pixel_residui_pulito": res_off})
+            flag = "  <-- frecce ancora visibili: aumenta --settle_toggle" if res_off > 0.02 * max(res_on, 1) else ""
+            print(f"[media] scatto {k}: pixel delle frecce {res_on} -> nello scatto pulito {res_off}{flag}")
             files += [on.name, off.name]
 
     if kind == "preview":
-        p = out_dir / f"_preview_{args_cli.preset}.png"
-        save_png(settle(), p)
+        suffix = "" if args_cli.ground == "grid" else f"_{args_cli.ground}"  # anteprime confrontabili
+        p = out_dir / f"_preview_{args_cli.preset}{suffix}.png"
+        save_png(settle(args_cli.settle), p)
         files.append(p.name)
     if writer:
         writer.close()
@@ -504,8 +733,15 @@ def main():
         "num_envs": base.num_envs, "risoluzione": list(env_cfg.viewer.resolution), "fps": fps,
         "preroll_s": preset["preroll"] if kind == "video" else 0.0, "durata_s": (total - preroll) * dt if kind == "video" else None,
         "randomizzazioni": "training" if dr else "spente (robot nominale)", "frecce": arrows,
-        "camera": cam.describe(), "focale_mm": args_cli.focal_length, "modifiche_config": log,
+        "aspetto": args_cli.look, "sole": sun, "shader_robot_modificati": recolored,
+        "robot": None if args_cli.look != "tesi" else {"albedo": args_cli.robot_color, "roughness": args_cli.robot_roughness,
+                                                      "metallic": args_cli.robot_metallic},
+        "fstop": args_cli.fstop or None,
+        "camera": cam.describe(), "focale_mm": args_cli.focal_length, "pavimento": ground,
+        "scala_frecce": args_cli.arrow_scale, "rendering_mode": getattr(args_cli, "rendering_mode", None),
+        "render_di_riscaldamento": n_warm, "modifiche_config": log,
         "spinte": {"modo": args_cli.push, "ogni_s": preset["push_interval"], "eventi": pushes} if push_every else None,
+        "controllo_frecce": residual or None,
     }
     if kind == "stills":
         meta_path = out_path(out_dir, preset["name"], ".json", args_cli.overwrite)
