@@ -29,12 +29,13 @@ Preset (i file finiscono in media_tesi/, con accanto un .json che dice come sono
     V5b  spinte da fermo a 0.70 m ogni 3 s, camera laterale
     V6a  4096 robot, la camera gira attorno al centro (distanza 16 m, elevazione 35 deg), 24 s
     V6b  come V6a con distanza 20 m ed elevazione 28 deg
-    V7a  4096 robot, vertical reveal: dal livello dei robot alla vista zenitale da 150 m, 24 s
-    V7b  4096 robot fermi a quote casuali, trench run: in volo lungo un corridoio, poi su verso un angolo, 20 s
+    V7a  4096 robot fermi a quote casuali, vertical reveal: indietro di 35 m a livello dei robot, poi su fino
+         alla vista zenitale da 150 m, 30 s
+    V7b  4096 robot fermi a quote casuali, trench run: in volo lungo il corridoio del bordo, poi su verso
+         l'angolo opposto, 20 s
     V7c  4096 robot, spirale: raggio da 5 a 180 m ed elevazione da 10 a 60 deg in un giro e un quarto, 30 s
-    V7d  4096 robot fermi a quote casuali, carrellata lungo il bordo puntata sull'angolo opposto, 24 s
     (V7: vedi TRAIETTORIE; --traj chiave=valore cambia un parametro del percorso, --crowd il comportamento
-    dei robot, --fstop la profondita' di campo: --fstop 0 la spegne)
+    dei robot, --fstop accende la profondita' di campo, spenta di default)
 
 Cosa cambia rispetto a play.py, per tutti i preset:
   * terreno piano con i robot su una griglia (env_spacing): col terreno generato i robot nascono al
@@ -107,53 +108,44 @@ CAM_FRONT = dict(mode="follow", dist=3.8, azim=180.0, eye_z=1.4, look_z=0.8)
 # senza cambiarne la forma. Ogni parametro si cambia con --traj chiave=valore (es. --traj z_top=250).
 # azim serve solo a orientare il sole (vedi LUCE): la direzione da cui la camera guarda la scena per la
 # maggior parte del percorso.
-# FUOCO (con --fstop > 0): parte da focus_near [m] e arriva a focus_far (1e4 = infinito) tra le frazioni
-# focus_from e focus_to della durata. Si interpola in diottrie (1/d): lo sfocato di un oggetto a distanza d
-# e' proporzionale a |1/d - 1/d_fuoco|, quindi cambia a ritmo costante invece di concentrarsi alla fine.
-# Misurato sulle anteprime del V7b (2026-10-08): ~130 px di sfocatura per diottria a f/11, ~65 a f/22, ~45
-# a f/32 (1920 px di larghezza). La finestra va chiusa PRIMA che i robot in vista siano tutti lontani: col
-# trench a 9-18 s, a 12 s il fuoco era a 7 m e i robot a 25-100 m, immagine tutta sfocata.
+# FUOCO: profondita' di campo spenta di default in tutti i V7 (decisione del 2026-10-08, dopo le anteprime);
+# con --fstop > 0 il fuoco parte da focus_near [m] e arriva a focus_far (1e4 = infinito) tra le frazioni
+# focus_from e focus_to della durata, interpolato in diottrie (1/d): lo sfocato di un oggetto a distanza d
+# e' proporzionale a |1/d - 1/d_fuoco|. Misurato sulle anteprime del V7b: ~130 px per diottria a f/11, ~65 a
+# f/22, ~45 a f/32 (1920 px di larghezza). La finestra va chiusa PRIMA che i robot in vista siano tutti
+# lontani, altrimenti l'immagine e' tutta sfocata.
 TRAJ_DEFAULTS = {
     # VERTICAL REVEAL: parte da (x0, y0, z0) puntata al centro, carrellata all'indietro di `back` m nella
-    # prima frazione `dolly`; poi, nella frazione `rise`, sale fino a z_top tornando sopra il centro, col
-    # beccheggio che arriva alla vista zenitale. La salita in metri parte e arriva dolce (picco ~14 m/s a
-    # meta'); il beccheggio segue la quota in scala logaritmica, cioe' quanto si rimpicciolisce la scena:
-    # ~50 deg a 17 m, quasi zenitale gia' a 75 m, poi la camera sale ancora guardando giu'.
-    "reveal": dict(x0=0.0, y0=-5.0, z0=1.5, look_z=0.9, back=5.0, z_top=150.0, dolly=0.25, rise=0.65,
-                   focus_near=5.0, focus_far=1.0e4, focus_from=0.0, focus_to=0.5),
-    # TRENCH RUN: nel corridoio fra due file di robot a quota z0, da y0 fino al centro (y = 0) a velocita'
-    # costante nella frazione `run`, guardando lungo il corridoio (ahead m avanti, drop m piu' in basso: con
-    # 2.7 la vista scende di 6 deg e l'orizzonte sta nel terzo superiore; con 0.5 era a meta' immagine).
-    # Da y = 0, nella frazione `lift`: frenata dolce in avanti (velocita' continua), salita a z_top e pan
-    # verso l'angolo (corner_x, corner_y, corner_z); aim_down [deg] abbassa la vista finale sotto l'angolo
-    # (6.2 = angolo nel terzo superiore dell'immagine invece che al centro, con sopra solo pavimento vuoto).
-    # Fuoco all'infinito nei primi 3 s di salita (focus_to 0.6). x = il corridoio voluto: si usa quello fra due file
-    # piu' vicino (x = 1.25 e' proprio una fila, il corridoio accanto e' a x = 0).
-    "trench": dict(x=1.25, y0=-80.0, z0=1.5, ahead=25.0, drop=2.7, run=0.45, lift=0.45, z_top=30.0,
+    # prima frazione `dolly` (lungo il corridoio x = 0, fra due file); poi, nella frazione `rise`, sale fino
+    # a z_top tornando sopra il centro, col beccheggio che arriva alla vista zenitale. La salita parte e
+    # arriva dolce; il beccheggio segue la quota in scala logaritmica, cioe' quanto si rimpicciolisce la
+    # scena: ~50 deg a 17 m, quasi zenitale gia' a 75 m, poi la camera sale ancora guardando giu'.
+    # back = 35: 5 m della prima versione + 30 m chiesti dopo le anteprime.
+    "reveal": dict(x0=0.0, y0=-5.0, z0=1.5, look_z=0.9, back=35.0, z_top=150.0, dolly=0.4, rise=0.5,
+                   focus_near=5.0, focus_far=1.0e4, focus_from=0.0, focus_to=0.4),
+    # TRENCH RUN: nel corridoio fra due file di robot a quota z0, da y0 a y_lift a velocita' costante nella
+    # frazione `run`, guardando lungo il corridoio (ahead m avanti, drop m piu' in basso: con 2.7 la vista
+    # scende di 6 deg e l'orizzonte sta nel terzo superiore). Da y_lift, nella frazione `lift`: frenata dolce
+    # in avanti (velocita' continua), salita a z_top e pan verso l'angolo (corner_x, corner_y, corner_z);
+    # aim_down [deg] abbassa la vista finale sotto l'angolo (6.2 = angolo nel terzo superiore).
+    # Seconda versione (2026-10-08): corridoio lungo il bordo sinistro (x = -77.5, fra le due file esterne)
+    # e salita a y = -40 invece che al centro: in volo la camera guarda in diagonale attraverso tutta la
+    # griglia verso l'angolo opposto. Robot inquadrati a fine salita (modello della camera): ~2000 contro i
+    # ~470 della prima versione (corridoio centrale, salita a y = 0). x = il corridoio voluto: si usa quello
+    # fra due file piu' vicino.
+    "trench": dict(x=-77.5, y0=-80.0, y_lift=-40.0, z0=1.5, ahead=25.0, drop=2.7, run=0.3, lift=0.55, z_top=30.0,
                    corner_x=80.0, corner_y=80.0, corner_z=0.5, aim_down=6.2, focus_near=5.0, focus_far=1.0e4,
-                   focus_from=0.45, focus_to=0.6),
+                   focus_from=0.3, focus_to=0.45),
     # EXPANSIVE SPIRAL: orbita attorno a (cx, cy, look_z); raggio da r0 a r1 ed elevazione da elev0 a elev1
     # crescono linearmente con l'azimut, che va da azim0 ad azim0 + turn [deg]. L'azimut parte e si ferma
     # con dolcezza. Al centro di una griglia pari non c'e' un robot: --traj cx=1.25 cy=1.25 ne mette uno
     # al centro dell'inquadratura iniziale.
     "spiral": dict(cx=0.0, cy=0.0, look_z=0.8, r0=5.0, r1=180.0, elev0=10.0, elev1=60.0, azim0=0.0, turn=450.0,
                    focus_near=5.0, focus_far=1.0e4, focus_from=0.0, focus_to=0.35),
-    # DIAGONAL SWEEP: da (x0, y0, z) a (x1, y1, z) lungo il bordo della griglia, col bersaglio fermo
-    # nell'angolo opposto (look_x, look_y, look_z): le file di robot convergono nei punti di fuga, che
-    # ruotano durante la carrellata. Il fuoco NON va all'infinito: la prima fila resta a ~6 m per tutta la
-    # carrellata e a fuoco infinito sarebbe sfocata (~10 px a f/22). focus_far = 12 m = il doppio della
-    # prima fila: sfocato uguale e minimo (1/12 di diottria) sulla prima fila e all'orizzonte; con f/32
-    # ~3 px. focus_near 4 m: i robot a 3-5 m dell'angolo nitidi, lo sfondo sfocato (con 2.5 m nessun robot
-    # in vista era a fuoco).
-    "sweep": dict(x0=-80.0, y0=-80.0, x1=80.0, y1=-80.0, z=2.0, look_x=80.0, look_y=80.0, look_z=2.0,
-                  focus_near=4.0, focus_far=12.0, focus_from=0.0, focus_to=0.5),
 }
-# fstop: profondita' di campo accesa di default (--fstop la cambia, --fstop 0 la spegne). Scelto f/22 sulle
-# anteprime del V7b: a f/11 anche i robot a fuoco erano morbidi e a mezza salita la scena era illeggibile.
-CAM_REVEAL = dict(mode="traj", traj="reveal", azim=270.0, fstop=22.0)
-CAM_TRENCH = dict(mode="traj", traj="trench", azim=270.0, fstop=22.0)
-CAM_SPIRAL = dict(mode="traj", traj="spiral", azim=0.0, fstop=22.0)
-CAM_SWEEP = dict(mode="traj", traj="sweep", azim=225.0, fstop=32.0)  # prima fila sempre vicina: vedi sweep
+CAM_REVEAL = dict(mode="traj", traj="reveal", azim=270.0)
+CAM_TRENCH = dict(mode="traj", traj="trench", azim=270.0)
+CAM_SPIRAL = dict(mode="traj", traj="spiral", azim=0.0)
 
 # Gruppi di modifiche alla configurazione: (percorso puntato, valore). Un percorso che non esiste
 # ferma lo script con un errore: un nome sbagliato non deve passare in silenzio.
@@ -227,16 +219,16 @@ PRESETS = {
                 dr=True, cam=CAM_ORBIT_16, arrows="off", mods=[]),
     "V6b": dict(kind="video", name="V6b_orbita_d20_e28", num_envs=4096, spacing=2.5, duration=24.0, preroll=1.0,
                 dr=True, cam=CAM_ORBIT_20, arrows="off", mods=[]),
-    # V7: traiettorie di camera temporizzate (vedi TRAIETTORIE). Robot fermi dove la camera vola fra le
-    # file (trench a 1.5 m) o sfrutta i loro allineamenti (sweep).
-    "V7a": dict(kind="video", name="V7a_vertical_reveal", num_envs=4096, spacing=2.5, duration=24.0, preroll=1.0,
-                dr=True, cam=CAM_REVEAL, arrows="off", crowd="misti", mods=[]),
+    # V7: traiettorie di camera temporizzate (vedi TRAIETTORIE). Robot fermi dove la camera passa a 1.5 m fra
+    # le file: V7a (35 m di carrellata) e V7b. Con i comandi del training i robot camminano per metri e la
+    # camera finirebbe dentro qualcuno: a posizioni ormai mescolate, ~3 robot in media nella striscia di
+    # 0.6 x 35 m che la camera del V7a attraversa.
+    "V7a": dict(kind="video", name="V7a_vertical_reveal", num_envs=4096, spacing=2.5, duration=30.0, preroll=1.0,
+                dr=True, cam=CAM_REVEAL, arrows="off", crowd="squat", mods=[]),
     "V7b": dict(kind="video", name="V7b_trench_run", num_envs=4096, spacing=2.5, duration=20.0, preroll=1.0,
                 dr=True, cam=CAM_TRENCH, arrows="off", crowd="squat", mods=[]),
     "V7c": dict(kind="video", name="V7c_spirale", num_envs=4096, spacing=2.5, duration=30.0, preroll=1.0,
                 dr=True, cam=CAM_SPIRAL, arrows="off", crowd="misti", mods=[]),
-    "V7d": dict(kind="video", name="V7d_diagonale", num_envs=4096, spacing=2.5, duration=24.0, preroll=1.0,
-                dr=True, cam=CAM_SWEEP, arrows="off", crowd="squat", mods=[]),
     "V2":dict(kind="video", name="V2_misti", num_envs=32, spacing=4.0, duration=18.0, preroll=1.0,
                dr=True, cam=CAM_GRID_32, arrows="on", mods=[]),
     "V2a": dict(kind="video", name="V2a_misti", num_envs=512, spacing=2.0, duration=18.0, preroll=1.0,
@@ -331,8 +323,7 @@ parser.add_argument("--sun_angle", type=float, default=0.53, help="Diametro appa
 parser.add_argument("--sky_intensity", type=float, default=800.0, help="--look tesi: luce diffusa del cielo uniforme.")
 parser.add_argument("--fstop", type=float, default=None,
                     help="Profondita' di campo: f-stop della camera (0 = spenta; piu' basso = piu' sfocato). Fuoco "
-                         "sul bersaglio, o animato come in TRAIETTORIE per i V7. Default: 22 per i V7 (32 per V7d), 0 "
-                         "per gli altri.")
+                         "sul bersaglio, o animato come in TRAIETTORIE per i V7. Default: 0 (spenta) per tutti i preset.")
 parser.add_argument("--ground_shade", type=float, default=0.35, help="--ground grey: grigio del pavimento (0-1).")
 parser.add_argument("--arrow_scale", type=float, default=None, help="Spessore/lunghezza delle frecce (Isaac Lab: 0.5).")
 parser.add_argument("--settle", type=int, default=32, help="Render ripetuti sullo stesso stato per uno scatto fermo.")
@@ -526,17 +517,18 @@ def traj_pose(kind: str, P: dict, u: float):
         z = P["z0"] + (P["z_top"] - P["z0"]) * k
         lz = math.log(z / P["z0"]) / math.log(P["z_top"] / P["z0"]) if P["z_top"] > P["z0"] else 1.0
         pitch = pitch0 + (PITCH_MAX - pitch0) * _smooth(lz)  # segue la quota in scala logaritmica
-        eye = np.array([*(start[:2] * (1.0 - k)), z])  # torna sopra il centro mentre sale (10 m su 150)
+        eye = np.array([*(start[:2] * (1.0 - k)), z])  # torna sopra il centro mentre sale (40 m su 150)
         return eye, eye + _view_dir(yaw, pitch) * max(float(np.linalg.norm(center - eye)), 1.0)
     if kind == "trench":
         yaw0, pitch0 = math.pi / 2, math.atan2(P["drop"], P["ahead"])  # lungo +y, appena verso il basso
         if u <= P["run"]:
-            eye = np.array([P["x"], P["y0"] * (1.0 - u / P["run"]), P["z0"]])
+            eye = np.array([P["x"], P["y0"] + (P["y_lift"] - P["y0"]) * u / P["run"], P["z0"]])
             return eye, eye + _view_dir(yaw0, pitch0) * P["ahead"]
-        # da y = 0: y(s) = dy (1 - (1 - s)^3), con dy scelto perche' la velocita' iniziale sia quella della corsa
+        # da y_lift: y = y_lift + dy (1 - (1 - s)^3), con dy scelto perche' la velocita' iniziale sia quella della corsa
         s = min((u - P["run"]) / P["lift"], 1.0)
-        dy = -P["y0"] * P["lift"] / (3.0 * P["run"])
-        eye = np.array([P["x"], dy * (1.0 - (1.0 - s) ** 3), P["z0"] + (P["z_top"] - P["z0"]) * _smooth(s)])
+        dy = (P["y_lift"] - P["y0"]) * P["lift"] / (3.0 * P["run"])
+        eye = np.array([P["x"], P["y_lift"] + dy * (1.0 - (1.0 - s) ** 3),
+                        P["z0"] + (P["z_top"] - P["z0"]) * _smooth(s)])
         to_c = np.array([P["corner_x"], P["corner_y"], P["corner_z"]]) - eye
         yaw_c, pitch_c = _angles(to_c)
         pitch_c += math.radians(P.get("aim_down", 0.0))
@@ -551,10 +543,6 @@ def traj_pose(kind: str, P: dict, u: float):
         a = math.radians(P["azim0"] + P["turn"] * e)
         look = np.array([P["cx"], P["cy"], P["look_z"]])
         return look + r * np.array([math.cos(el) * math.cos(a), math.cos(el) * math.sin(a), math.sin(el)]), look
-    if kind == "sweep":
-        s = _smooth(u)
-        eye = np.array([P["x0"] + (P["x1"] - P["x0"]) * s, P["y0"] + (P["y1"] - P["y0"]) * s, P["z"]])
-        return eye, np.array([P["look_x"], P["look_y"], P["look_z"]])
     raise ValueError(f"traiettoria sconosciuta: {kind}")
 
 
