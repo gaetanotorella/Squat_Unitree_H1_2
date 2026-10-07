@@ -14,6 +14,7 @@ Uso (dalla radice del repo, ambiente conda di Isaac Lab attivo):
 
     python scripts/rsl_rl/media.py --preset S1 --headless
     python scripts/rsl_rl/media.py --preset V3 --headless --preview     # un fotogramma, per l'inquadratura
+    scripts/rsl_rl/media_all.sh                                         # tutti i preset in media_tesi/media_N
 
 Preset (i file finiscono in media_tesi/, con accanto un .json che dice come sono stati fatti):
 
