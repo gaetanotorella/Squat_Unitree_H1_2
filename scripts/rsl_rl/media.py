@@ -39,8 +39,8 @@ Per i preset a un robot (V3-V5), inoltre:
   * curriculum spenti, randomizzazioni fisiche spente (--dr on per riaccenderle): robot nominale;
   * camera che segue solo x/y del robot, ad altezza fissa (non sale e scende con lo squat).
 
-Aspetto (--look): 'tesi' (default) = robot nero satinato, pavimento con le piastrelle chiare del
-training, sole con ombre nette dietro il soggetto a destra (come la foto di riferimento), cielo
+Aspetto (--look): 'tesi' (default) = robot nero satinato, pavimento chiaro con la griglia bianca del
+piano di Isaac (colore del fondo calibrato in automatico su --ground_rgb), sole con ombre nette dietro il soggetto a destra (come la foto di riferimento), cielo
 uniforme chiaro; 'isaac' = scena di default di Isaac Lab. Luce e robot si regolano con --sun_*,
 --sky_intensity, --robot_*; --fstop accende la profondita' di campo.
 
@@ -173,10 +173,14 @@ parser.add_argument("--focal_length", type=float, default=None, help="Focale del
 parser.add_argument("--look", choices=("tesi", "isaac"), default="tesi",
                     help="'tesi' = robot nero, pavimento chiaro, sole con ombre nette e cielo uniforme; "
                          "'isaac' = scena di default (cielo HDR, robot grigi).")
-parser.add_argument("--ground", choices=("grid", "grey", "marble"), default=None,
-                    help="Pavimento: 'grid' = piano di default (nero a griglia), 'grey' = grigio opaco uniforme, "
-                         "'marble' = le piastrelle chiare del terreno di training. Default: marble con --look "
-                         "tesi, grid con --look isaac.")
+parser.add_argument("--ground", choices=("lightgrid", "grid", "grey", "marble"), default=None,
+                    help="Pavimento: 'lightgrid' = la griglia bianca del piano di default su fondo chiaro "
+                         "calibrato al colore --ground_rgb; 'grid' = piano di default (nero a griglia); 'grey' = "
+                         "grigio opaco uniforme; 'marble' = materiale del terreno di training (sul piano appare "
+                         "uniforme). Default: lightgrid con --look tesi, grid con --look isaac.")
+parser.add_argument("--ground_rgb", type=float, nargs=3, default=(206.0, 204.0, 203.0), metavar=("R", "G", "B"),
+                    help="lightgrid: colore del fondo come deve uscire nell'immagine (sRGB 0-255). Default: il "
+                         "pavimento misurato nelle anteprime del 2026-10-07 (mediana su V3, S1, V1).")
 parser.add_argument("--robot_color", type=float, default=0.02, help="--look tesi: albedo del robot (lineare, 0-1).")
 parser.add_argument("--robot_roughness", type=float, default=0.45)
 parser.add_argument("--robot_metallic", type=float, default=0.2)
@@ -373,11 +377,60 @@ class Camera:
         return {**self.p, "eye": [round(float(v), 3) for v in self.eye], "lookat": [round(float(v), 3) for v in self.look]}
 
 
-def apply_ground(kind: str, env_cfg, shade: float) -> str:
+def srgb_to_lin(c):
+    c = np.asarray(c, dtype=float)
+    return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+
+
+def set_input(prim, name: str, type_name, value):
+    """Imposta un input di shader; se il prim e' dentro un'istanza lo scrive nel layer di origine."""
+    from pxr import Sdf
+
+    if not prim.IsInstanceProxy():
+        attr = prim.GetAttribute(name)
+        if not attr:
+            attr = prim.CreateAttribute(name, type_name)
+        attr.Set(value)
+        return
+    spec = prim.GetPrimStack()[0]
+    a = spec.attributes[name] if name in spec.attributes else Sdf.AttributeSpec(spec, name, type_name)
+    a.default = value
+
+
+def find_grid_shader(ground_root: str):
+    """Shader 'theGrid' del piano di default di Isaac (Environments/Grid/default_environment.usd):
+    OmniPBR proiettato in coordinate mondo. Le linee bianche sono EMISSIVE (maschera WireframeBlur,
+    intensita' 1000); il fondo e' una texture blu scuro moltiplicata per diffuse_tint, che Isaac Lab
+    mette a nero. Per un fondo chiaro si toglie la texture e si usa diffuse_color_constant."""
+    import omni.usd
+    from pxr import Usd
+
+    root = omni.usd.get_context().get_stage().GetPrimAtPath(ground_root)
+    if not root.IsValid():
+        return None
+    for p in Usd.PrimRange(root, Usd.TraverseInstanceProxies()):
+        if p.GetTypeName() == "Shader" and p.GetParent().GetName() == "theGrid":
+            return p
+    return None
+
+
+def apply_ground(kind: str, env_cfg, shade: float):
     """Materiale del pavimento sopra il piano di default. Il piano di Isaac Lab ('grid') e' nero con
-    una griglia bianca a 1 m: molto contrastato, e in V1 da lontano le linee sfarfallano."""
+    una griglia bianca a 1 m: molto contrastato, e in V1 da lontano le linee sfarfallano.
+    Restituisce (descrizione, shader della griglia da calibrare o None)."""
     if kind == "grid":
-        return "piano di default (nero a griglia)"
+        return "piano di default (nero a griglia)", None
+    if kind == "lightgrid":
+        from pxr import Gf, Sdf
+
+        shader = find_grid_shader(env_cfg.scene.terrain.prim_path)
+        if shader is None:
+            print("[media] ATTENZIONE: shader 'theGrid' non trovato, resta il pavimento di default")
+            return "piano di default (shader della griglia non trovato)", None
+        set_input(shader, "inputs:diffuse_texture", Sdf.ValueTypeNames.Asset, Sdf.AssetPath(""))
+        set_input(shader, "inputs:diffuse_tint", Sdf.ValueTypeNames.Color3f, Gf.Vec3f(1.0, 1.0, 1.0))
+        set_input(shader, "inputs:diffuse_color_constant", Sdf.ValueTypeNames.Color3f, Gf.Vec3f(0.5, 0.5, 0.5))
+        return "griglia bianca su fondo chiaro (colore calibrato)", shader
     import isaaclab.sim as sim_utils
 
     mat_path = "/World/Looks/media_ground"
@@ -392,8 +445,42 @@ def apply_ground(kind: str, env_cfg, shade: float) -> str:
         sim_utils.bind_visual_material(env_cfg.scene.terrain.prim_path, mat_path)
     except Exception as e:  # meglio un'immagine col pavimento di default che un lancio perso
         print(f"[media] ATTENZIONE: pavimento '{kind}' non applicato ({e}); resta quello di default")
-        return f"piano di default (fallito '{kind}': {e})"
-    return desc
+        return f"piano di default (fallito '{kind}': {e})", None
+    return desc, None
+
+
+def calibrate_floor(base, cam, shader, target_srgb, settle, iters: int = 6) -> dict:
+    """Regola il colore del fondo finche' NELL'IMMAGINE esce target_srgb (entro 1 livello su 255).
+
+    Il colore renderizzato dipende da luce, esposizione e riflesso del materiale, quindi non si puo'
+    impostare a priori: si guarda un tratto di pavimento vuoto (camera spostata di 500 m, stesso
+    orientamento dell'inquadratura vera), si misura la mediana di una fascia centrale -- le linee della
+    griglia sono sottili e non la spostano -- e si corregge in spazio lineare, dove il diffuso e'
+    proporzionale al colore del materiale."""
+    from pxr import Gf, Sdf
+
+    target = np.asarray(target_srgb, dtype=float)
+    target_lin = srgb_to_lin(target / 255.0)
+    c = target_lin.copy()  # primo tentativo: albedo = colore voluto
+    off = np.array([500.0, 500.0, 0.0])
+    base.sim.set_camera_view(tuple(float(v) for v in cam.eye + off), tuple(float(v) for v in cam.look + off))
+    steps, meas = [], target
+    for _ in range(iters):
+        set_input(shader, "inputs:diffuse_color_constant", Sdf.ValueTypeNames.Color3f, Gf.Vec3f(*map(float, c)))
+        img = settle(48)
+        h, w = img.shape[:2]
+        band = img[int(0.60 * h):int(0.95 * h), int(0.2 * w):int(0.8 * w)].reshape(-1, 3).astype(float)
+        meas = np.median(band, axis=0)
+        steps.append({"albedo": [round(float(v), 4) for v in c], "misurato_srgb": [round(float(v), 1) for v in meas]})
+        if np.abs(meas - target).max() <= 1.0:
+            break
+        c = np.clip(c * target_lin / np.maximum(srgb_to_lin(meas / 255.0), 1e-4), 0.0, 1.0)
+    cam.update()  # di nuovo sull'inquadratura vera
+    ok = bool(np.abs(meas - target).max() <= 1.0)
+    print(f"[media] pavimento: voluto sRGB {tuple(int(v) for v in target)}, ottenuto {tuple(int(round(v)) for v in meas)} "
+          f"in {len(steps)} passi{'' if ok else '  <-- NON raggiunto (albedo al limite?)'}")
+    return {"voluto_srgb": [float(v) for v in target], "ottenuto_srgb": [round(float(v), 1) for v in meas],
+            "albedo_finale": steps[-1]["albedo"], "passi": steps, "raggiunto": ok}
 
 
 def add_sun(cam_azim: float, args) -> dict:
@@ -608,8 +695,8 @@ def main():
     if args_cli.focal_length:
         set_focal_length(env_cfg.viewer.cam_prim_path, args_cli.focal_length)
     if args_cli.ground is None:
-        args_cli.ground = "marble" if args_cli.look == "tesi" else "grid"
-    ground = apply_ground(args_cli.ground, env_cfg, args_cli.ground_shade)
+        args_cli.ground = "lightgrid" if args_cli.look == "tesi" else "grid"
+    ground, grid_shader = apply_ground(args_cli.ground, env_cfg, args_cli.ground_shade)
     sun, recolored = None, None
     if args_cli.look == "tesi":
         cam_azim = args_cli.cam_azim if args_cli.cam_azim is not None else preset["cam"]["azim"]
@@ -650,6 +737,10 @@ def main():
 
     n_warm = warmup(args_cli.warmup)
     print(f"[media] scena pronta dopo {n_warm} render")
+    floor_cal = None
+    if grid_shader is not None:  # a scena caricata, prima del primo fotogramma
+        floor_cal = calibrate_floor(base, cam, grid_shader, args_cli.ground_rgb, settle)
+        settle(args_cli.settle)  # il renderer riparte dall'inquadratura vera
 
     preroll = int(round(preset["preroll"] / dt))
     if args_cli.preview:
@@ -738,6 +829,7 @@ def main():
                                                       "metallic": args_cli.robot_metallic},
         "fstop": args_cli.fstop or None,
         "camera": cam.describe(), "focale_mm": args_cli.focal_length, "pavimento": ground,
+        "calibrazione_pavimento": floor_cal,
         "scala_frecce": args_cli.arrow_scale, "rendering_mode": getattr(args_cli, "rendering_mode", None),
         "render_di_riscaldamento": n_warm, "modifiche_config": log,
         "spinte": {"modo": args_cli.push, "ogni_s": preset["push_interval"], "eventi": pushes} if push_every else None,
