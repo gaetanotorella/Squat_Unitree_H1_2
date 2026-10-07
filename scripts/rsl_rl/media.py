@@ -121,10 +121,12 @@ TRAJ_DEFAULTS = {
     # TRENCH RUN: nel corridoio fra due file di robot a quota z0, da y0 fino al centro (y = 0) a velocita'
     # costante nella frazione `run`, guardando lungo il corridoio (ahead m avanti, drop m piu' in basso).
     # Da y = 0, nella frazione `lift`: frenata dolce in avanti (velocita' continua), salita a z_top e pan
-    # verso l'angolo (corner_x, corner_y, corner_z). x = il corridoio voluto: si usa quello fra due file
+    # verso l'angolo (corner_x, corner_y, corner_z); aim_down [deg] abbassa la vista finale sotto l'angolo
+    # (6.2 = angolo nel terzo superiore dell'immagine). x = il corridoio voluto: si usa quello fra due file
     # piu' vicino (x = 1.25 e' proprio una fila, il corridoio accanto e' a x = 0).
     "trench": dict(x=1.25, y0=-80.0, z0=1.5, ahead=25.0, drop=0.5, run=0.45, lift=0.45, z_top=30.0,
-                   corner_x=80.0, corner_y=80.0, corner_z=0.5, focus_near=5.0, focus_from=0.45, focus_to=0.9),
+                   corner_x=80.0, corner_y=80.0, corner_z=0.5, aim_down=0.0, focus_near=5.0, focus_from=0.45,
+                   focus_to=0.9),
     # EXPANSIVE SPIRAL: orbita attorno a (cx, cy, look_z); raggio da r0 a r1 ed elevazione da elev0 a elev1
     # crescono linearmente con l'azimut, che va da azim0 ad azim0 + turn [deg]. L'azimut parte e si ferma
     # con dolcezza. Al centro di una griglia pari non c'e' un robot: --traj cx=1.25 cy=1.25 ne mette uno
@@ -331,6 +333,9 @@ parser.add_argument("--preview", action="store_true", help="Salva solo i fotogra
 parser.add_argument("--preview_at", type=float, nargs="+", default=[2.0],
                     help="Istanti dei fotogrammi di --preview, nel tempo del video (dopo il preroll) [s]: lo stesso "
                          "fotogramma che il video avrebbe a quell'istante. Con piu' istanti i file finiscono in _t<s>.")
+parser.add_argument("--preview_fstop", type=float, nargs="+", default=None,
+                    help="Con --preview: rende ogni fotogramma con questi f-stop (0 = senza sfocatura), file _f<N>. "
+                         "Stessa scena e stesso fuoco: serve a scegliere --fstop senza rilanciare la simulazione.")
 cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -523,6 +528,7 @@ def traj_pose(kind: str, P: dict, u: float):
         eye = np.array([P["x"], dy * (1.0 - (1.0 - s) ** 3), P["z0"] + (P["z_top"] - P["z0"]) * _smooth(s)])
         to_c = np.array([P["corner_x"], P["corner_y"], P["corner_z"]]) - eye
         yaw_c, pitch_c = _angles(to_c)
+        pitch_c += math.radians(P.get("aim_down", 0.0))
         w = _smooth(s)
         yaw = yaw0 + w * ((yaw_c - yaw0 + math.pi) % (2.0 * math.pi) - math.pi)  # pan dal corridoio all'angolo
         pitch = pitch0 + w * (pitch_c - pitch0)
@@ -557,6 +563,31 @@ def corridor_x(xs, x_req: float) -> float:
     return float(mids[np.argmin(np.abs(mids - x_req))])
 
 
+def set_cam_attr(cam_prim_path: str, name: str, value: float, quiet: bool = False) -> dict:
+    """Scrive un attributo della camera del viewport (fStop, focusDistance, focalLength) e lo rilegge.
+
+    /OmniverseKit_Persp sta nel session layer di Kit, che vince sul layer radice, dove scrive un Set()
+    normale: un attributo che Kit ha gia' scritto li' resta quello di Kit. Nel primo test (2026-10-08, V7b)
+    l'f-stop funzionava ma il fuoco no: sfocati solo i robot vicini, orizzonte nitido, cioe' fuoco ancora
+    lontano. Ipotesi: Kit crea la camera con un focusDistance gia' scritto (400) nel session layer; il valore
+    'prima' stampato qui lo conferma. Qui si scrive nel session layer e si rilegge."""
+    import omni.usd
+    from pxr import Usd
+
+    stage = omni.usd.get_context().get_stage()
+    attr = stage.GetPrimAtPath(cam_prim_path).GetAttribute(name)
+    before = attr.Get()
+    with Usd.EditContext(stage, stage.GetSessionLayer()):
+        attr.Set(float(value))
+    got = attr.Get()
+    ok = got is not None and abs(float(got) - value) <= 1e-4 * max(1.0, abs(value))
+    if not ok or not quiet:
+        print(f"[media] camera: {name} {before} -> {value:g} (riletto {got})"
+              + ("" if ok else "  <-- NON applicato: il renderer usa ancora il valore vecchio"))
+    return {"prima": None if before is None else float(before), "scritto": float(value),
+            "riletto": None if got is None else float(got), "ok": ok}
+
+
 class Camera:
     def __init__(self, base_env, cam: dict, args, duration: float | None = None):
         self.sim = base_env.sim
@@ -570,15 +601,12 @@ class Camera:
         self.xy = None
         self.eye = self.look = None
         self.focus = None
-        self.usd_cam = None
+        self.cam_path = base_env.cfg.viewer.cam_prim_path
         self.fstop = args.fstop if args.fstop is not None else self.p.get("fstop", 0.0)
-        if self.fstop > 0:  # profondita' di campo: f-stop fisso, fuoco aggiornato a ogni fotogramma
-            import omni.usd
-            from pxr import UsdGeom
-
-            prim = omni.usd.get_context().get_stage().GetPrimAtPath(base_env.cfg.viewer.cam_prim_path)
-            self.usd_cam = UsdGeom.Camera(prim)
-            self.usd_cam.GetFStopAttr().Set(float(self.fstop))
+        # profondita' di campo: f-stop fisso, fuoco aggiornato a ogni fotogramma (anche solo per --preview_fstop)
+        self.dof = {} if (self.fstop > 0 or args.preview_fstop) else None
+        if self.fstop > 0:
+            self.dof["fStop"] = set_cam_attr(self.cam_path, "fStop", self.fstop)
         if args.orbit_period is not None:
             self.p["period"] = args.orbit_period
         self.t = 0.0
@@ -643,8 +671,9 @@ class Camera:
         if self.p["mode"] != "traj":
             self.focus = float(np.linalg.norm(self.eye - self.look))  # fuoco sul bersaglio
         self.sim.set_camera_view(tuple(float(v) for v in self.eye), tuple(float(v) for v in self.look))
-        if self.usd_cam is not None:
-            self.usd_cam.GetFocusDistanceAttr().Set(float(self.focus))
+        if self.dof is not None:
+            r = set_cam_attr(self.cam_path, "focusDistance", self.focus, quiet="focusDistance" in self.dof)
+            self.dof.setdefault("focusDistance", r)  # il primo: dice che valore c'era prima
 
     def calib_view(self):
         """Inquadratura su cui calibrare il colore del pavimento: quella della camera, tranne per le
@@ -661,7 +690,7 @@ class Camera:
         return [round(self.t, 4), *map(float, self.eye), *map(float, self.look), float(self.focus)]
 
     def describe(self):
-        d = {**self.p, "fstop": self.fstop or None, "eye": [round(float(v), 3) for v in self.eye],
+        d = {**self.p, "fstop": self.fstop or None, "attributi_camera": self.dof, "eye": [round(float(v), 3) for v in self.eye],
              "lookat": [round(float(v), 3) for v in self.look]}
         if self.p["mode"] == "traj":
             d.update(parametri=self.P, durata_s=self.T, centro=[round(float(v), 3) for v in self.c])
@@ -740,14 +769,19 @@ def apply_ground(kind: str, env_cfg, shade: float):
     return desc, None
 
 
-def calibrate_floor(base, cam, shader, target_srgb, settle, iters: int = 6) -> dict:
+def calibrate_floor(base, cam, shader, target_srgb, settle, iters: int = 8) -> dict:
     """Regola il colore del fondo finche' NELL'IMMAGINE esce target_srgb (entro 1 livello su 255).
 
     Il colore renderizzato dipende da luce, esposizione e riflesso del materiale, quindi non si puo'
     impostare a priori: si guarda un tratto di pavimento vuoto (camera spostata di 500 m, stesso
     orientamento dell'inquadratura vera), si misura la mediana di una fascia centrale -- le linee della
-    griglia sono sottili e non la spostano -- e si corregge in spazio lineare, dove il diffuso e'
-    proporzionale al colore del materiale."""
+    griglia sono sottili e non la spostano -- e si corregge.
+
+    Correzione: secante in scala log-log (misurato ~ k * albedo^g, g stimato dagli ultimi due passi). La
+    correzione proporzionale (g = 1) convergeva troppo piano: nel V7b del 2026-10-08 240 -> 233 -> 225 ->
+    219 -> 214 -> 212 contro 206, perche' sul pavimento chiaro l'immagine dipende poco dall'albedo (riflesso
+    del cielo, tone mapping: g ~ 0.3). Sugli stessi dati, simulati, la secante arriva entro 1 livello in 5
+    passi."""
     from pxr import Gf, Sdf
 
     target = np.asarray(target_srgb, dtype=float)
@@ -756,7 +790,7 @@ def calibrate_floor(base, cam, shader, target_srgb, settle, iters: int = 6) -> d
     off = np.array([500.0, 500.0, 0.0])
     eye, look = cam.calib_view()
     base.sim.set_camera_view(tuple(float(v) for v in eye + off), tuple(float(v) for v in look + off))
-    steps, meas = [], target
+    steps, meas, prev = [], target, None
     for _ in range(iters):
         set_input(shader, "inputs:diffuse_color_constant", Sdf.ValueTypeNames.Color3f, Gf.Vec3f(*map(float, c)))
         img = settle(48)
@@ -766,7 +800,14 @@ def calibrate_floor(base, cam, shader, target_srgb, settle, iters: int = 6) -> d
         steps.append({"albedo": [round(float(v), 4) for v in c], "misurato_srgb": [round(float(v), 1) for v in meas]})
         if np.abs(meas - target).max() <= 1.0:
             break
-        c = np.clip(c * target_lin / np.maximum(srgb_to_lin(meas / 255.0), 1e-4), 0.0, 1.0)
+        lc, lm = np.log(np.maximum(c, 1e-4)), np.log(np.maximum(srgb_to_lin(meas / 255.0), 1e-4))
+        g = np.ones(3)
+        if prev is not None:
+            dc = lc - prev[0]
+            g = np.where(np.abs(dc) > 1e-6, (lm - prev[1]) / np.where(np.abs(dc) > 1e-6, dc, 1.0), 1.0)
+            g = np.clip(g, 0.05, 2.0)
+        prev = (lc, lm)
+        c = np.clip(np.exp(lc + (np.log(target_lin) - lm) / g), 1e-3, 1.0)
     cam.update()  # di nuovo sull'inquadratura vera
     ok = bool(np.abs(meas - target).max() <= 1.0)
     print(f"[media] pavimento: voluto sRGB {tuple(int(v) for v in target)}, ottenuto {tuple(int(round(v)) for v in meas)} "
@@ -868,11 +909,7 @@ def arrow_pixels(img: np.ndarray) -> int:
 
 
 def set_focal_length(cam_prim_path: str, f: float):
-    import omni.usd
-    from pxr import UsdGeom
-
-    prim = omni.usd.get_context().get_stage().GetPrimAtPath(cam_prim_path)
-    UsdGeom.Camera(prim).GetFocalLengthAttr().Set(float(f))
+    set_cam_attr(cam_prim_path, "focalLength", f)  # stesso problema del fuoco: va nel session layer
 
 
 # --------------------------------------------------------------------------------------------------
@@ -1122,9 +1159,16 @@ def main():
         elif kind == "preview" and i in previews:
             suffix = "" if args_cli.ground == "grid" else f"_{args_cli.ground}"  # anteprime confrontabili
             tag = f"_t{previews[i]:g}" if len(previews) > 1 else ""
-            p = out_dir / f"_preview_{args_cli.preset}{suffix}{tag}.png"
-            save_png(settle(args_cli.settle), p)
-            files.append(p.name)
+            for fs in args_cli.preview_fstop or [None]:
+                ftag = ""
+                if fs is not None:
+                    set_cam_attr(cam.cam_path, "fStop", fs, quiet=True)
+                    ftag = f"_f{fs:g}"
+                p = out_dir / f"_preview_{args_cli.preset}{suffix}{tag}{ftag}.png"
+                save_png(settle(args_cli.settle), p)
+                files.append(p.name)
+            if args_cli.preview_fstop:
+                set_cam_attr(cam.cam_path, "fStop", cam.fstop, quiet=True)
             if cam.p["mode"] == "traj":
                 print(f"[media]   t {previews[i]:g} s: camera {np.round(cam.eye, 2).tolist()} -> "
                       f"{np.round(cam.look, 2).tolist()}, fuoco {cam.focus:.1f} m")
