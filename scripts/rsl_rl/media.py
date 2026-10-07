@@ -80,6 +80,9 @@ FINAL_RUN = "2026-09-13_21-27-39"
 # dal lato della camera. 0 = centro; V1 a 0.8 guarda vicino all'angolo: i robot in primo piano si
 # riconoscono e la griglia continua fino all'orizzonte (a 130 m dal centro erano puntini).
 CAM_GRID_32 = dict(mode="grid", dist=16.0, elev=35.0, azim=135.0, look_z=0.5, frac=0.0)
+CAM_GRID_32_2 = dict(mode="grid", dist=10.0, elev=30.0, azim=135.0, look_z=0.5, frac=0.0)
+CAM_GRID_32_3 = dict(mode="grid", dist=30.0, elev=22.0, azim=135.0, look_z=0.8, frac=0.0)
+
 CAM_GRID_4096 = dict(mode="grid", dist=30.0, elev=22.0, azim=135.0, look_z=0.8, frac=0.8)
 CAM_SIDE = dict(mode="follow", dist=3.8, azim=90.0, eye_z=1.4, look_z=0.8)
 CAM_FRONT = dict(mode="follow", dist=3.8, azim=180.0, eye_z=1.4, look_z=0.8)
@@ -137,12 +140,19 @@ def heading_hold(k):
 SINGLE = dict(num_envs=1, preroll=1.0, dr=False)
 PRESETS = {
     "S1": dict(kind="stills", name="S1_envs", num_envs=32, spacing=4.0, res=(3840, 2160), preroll=0.0,
-               # presto: a 8 s (primo test) chi cammina ha gia' lasciato la griglia e i robot si incrociano
                dr=True, cam=CAM_GRID_32, arrows="both", times=(2.5, 3.0, 3.5, 4.0, 5.0), mods=[]),
+    "S2": dict(kind="stills", name="S2_envs", num_envs=128, spacing=2.5, res=(3840, 2160), preroll=0.0,
+               dr=True, cam=CAM_GRID_32_2, arrows="both", times=(2.5, 3.0, 3.5, 4.0, 5.0), mods=[]),
+    "S3": dict(kind="stills", name="S3_envs", num_envs=4096, spacing=2.5, res=(3840, 2160), preroll=0.0,
+               dr=True, cam=CAM_GRID_32_3, arrows="both", times=(2.5, 3.0, 3.5, 4.0, 5.0), mods=[]),
+
     "V1": dict(kind="video", name="V1_scala", num_envs=4096, spacing=2.5, duration=12.0, preroll=1.0,
                dr=True, cam=CAM_GRID_4096, arrows="off", mods=[]),
     "V2": dict(kind="video", name="V2_misti", num_envs=32, spacing=4.0, duration=18.0, preroll=1.0,
                dr=True, cam=CAM_GRID_32, arrows="on", mods=[]),
+    "V2a": dict(kind="video", name="V2a_misti", num_envs=512, spacing=2.0, duration=18.0, preroll=1.0,
+                dr=True, cam=CAM_GRID_32, arrows="off", mods=[]),
+
     "V3": dict(kind="video", name="V3_squat", duration=30.0, cam=CAM_SIDE, arrows="off", **SINGLE,
                heights="0.98,0.60,0.98,0.80,0.65,0.90,0.70,0.98", segment=4.0,
                mods=STANDING + [("commands.base_height.ranges.height", (0.60, 0.98)),
