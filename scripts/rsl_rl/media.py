@@ -133,7 +133,7 @@ TRAJ_DEFAULTS = {
     # griglia verso l'angolo opposto. Robot inquadrati a fine salita (modello della camera): ~2000 contro i
     # ~470 della prima versione (corridoio centrale, salita a y = 0). x = il corridoio voluto: si usa quello
     # fra due file piu' vicino.
-    "trench": dict(x=-77.5, y0=-80.0, y_lift=-40.0, z0=1.5, ahead=25.0, drop=2.7, run=0.3, lift=0.55, z_top=30.0,
+    "trench": dict(x=0.0, y0=-80.0, y_lift=-40.0, z0=1.5, ahead=25.0, drop=2.7, run=0.3, lift=0.55, z_top=30.0,
                    corner_x=80.0, corner_y=80.0, corner_z=0.5, aim_down=6.2, focus_near=5.0, focus_far=1.0e4,
                    focus_from=0.3, focus_to=0.45),
     # EXPANSIVE SPIRAL: orbita attorno a (cx, cy, look_z); raggio da r0 a r1 ed elevazione da elev0 a elev1
@@ -224,9 +224,9 @@ PRESETS = {
     # camera finirebbe dentro qualcuno: a posizioni ormai mescolate, ~3 robot in media nella striscia di
     # 0.6 x 35 m che la camera del V7a attraversa.
     "V7a": dict(kind="video", name="V7a_vertical_reveal", num_envs=4096, spacing=2.5, duration=30.0, preroll=1.0,
-                dr=True, cam=CAM_REVEAL, arrows="off", crowd="squat", mods=[]),
+                dr=True, cam=CAM_REVEAL, arrows="off", crowd="misti", mods=[]),
     "V7b": dict(kind="video", name="V7b_trench_run", num_envs=4096, spacing=2.5, duration=20.0, preroll=1.0,
-                dr=True, cam=CAM_TRENCH, arrows="off", crowd="squat", mods=[]),
+                dr=True, cam=CAM_TRENCH, arrows="off", crowd="misti", mods=[]),
     "V7c": dict(kind="video", name="V7c_spirale", num_envs=4096, spacing=2.5, duration=30.0, preroll=1.0,
                 dr=True, cam=CAM_SPIRAL, arrows="off", crowd="misti", mods=[]),
     "V2":dict(kind="video", name="V2_misti", num_envs=32, spacing=4.0, duration=18.0, preroll=1.0,
