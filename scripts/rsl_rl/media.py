@@ -19,6 +19,8 @@ Uso (dalla radice del repo, ambiente conda di Isaac Lab attivo):
 Preset (i file finiscono in media_tesi/, con accanto un .json che dice come sono stati fatti):
 
     S1   32 robot su griglia, camera obliqua dall'alto, 5 istanti x 2 versioni (frecce / pulito), 4K
+    S4   un robot fermo in piedi a 0.98 m, senza frecce, con l'inquadratura della foto del robot reale
+         (misurata in MuJoCo), 4:3
     V1   4096 robot, camera alta e lontana, 12 s
     V2   32 robot, stessa camera di S1, 18 s (un solo episodio: niente reset simultaneo a 20 s)
     V3   squat da fermo, sequenza di quote fissa ogni 4 s, camera laterale, 30 s
@@ -101,6 +103,18 @@ CAM_ORBIT_16 = dict(mode="orbit", dist=16.0, elev=35.0, azim=135.0, look_z=0.5, 
 CAM_ORBIT_20 = dict(mode="orbit", dist=20.0, elev=28.0, azim=135.0, look_z=0.5, period=24.0)
 CAM_SIDE = dict(mode="follow", dist=3.8, azim=90.0, eye_z=1.4, look_z=0.8)
 CAM_FRONT = dict(mode="follow", dist=3.8, azim=180.0, eye_z=1.4, look_z=0.8)
+# SUL ROBOT ("robot"): camera agganciata alla posa del robot 0, con le convenzioni del visualizzatore di MuJoCo,
+# per rifare in Isaac Lab un'inquadratura presa li' (ATTENZIONE: azim ed elev qui NON sono quelli delle altre
+# camere):
+#   azim = direzione IN CUI GUARDA la camera, rispetto alla direzione in cui guarda il robot [deg];
+#   elev = beccheggio della vista, negativo = verso il basso [deg]; dist = distanza camera-bersaglio [m];
+#   bersaglio = base del robot + look_fwd in avanti + look_left a sinistra (riferimento del robot), alla quota
+#   assoluta look_z; vfov = campo visivo verticale [deg] (MuJoCo: vis.global.fovy).
+# Occhio = bersaglio - dist * (cos elev cos az, cos elev sin az, sin elev), come mjv_updateCamera.
+# S4 (2026-10-08): l'inquadratura della foto del robot reale, ricostruita in MuJoCo. La camera sta davanti al
+# robot, ruotata di ~29 deg verso la sua sinistra, a 1.05 m di quota.
+CAM_S4 = dict(mode="robot", dist=3.047, elev=-2.46, azim=209.16, look_fwd=0.389, look_left=0.371, look_z=0.919,
+              vfov=37.28)
 
 # TRAIETTORIE ("traj"): la camera segue un percorso nel tempo. Coordinate in metri RISPETTO AL CENTRO della
 # griglia, scritte per 4096 robot a 2.5 m (64 x 64, lato 160 m: bordo a +-80 m; le file di robot stanno a
@@ -209,6 +223,12 @@ PRESETS = {
                dr=True, cam=CAM_GRID_32, arrows="both", times=(2.5, 3.0, 3.5, 4.0, 5.0), mods=[]),
     "S2": dict(kind="stills", name="S2_envs", num_envs=128, spacing=2.5, res=(3840, 2160), preroll=0.0,
                dr=True, cam=CAM_GRID_32_2, arrows="both", times=(2.5, 3.0, 3.5, 4.0, 5.0), mods=[]),
+    # S4: robot nominale fermo in piedi (quota comandata 0.98 m, niente spinte ne' frecce) con l'inquadratura
+    # della foto reale (CAM_S4). 4:3 come la foto di riferimento (1300 x 975), al doppio. Sole alle spalle
+    # della camera a destra, come la luce del render MuJoCo: robot illuminato davanti, ombre dietro a sinistra.
+    "S4": dict(kind="stills", name="S4_in_piedi", num_envs=1, res=(2600, 1950), preroll=0.0, dr=False,
+               cam=CAM_S4, arrows="off", times=(5.0,), sun_rel_azim=45.0,
+               mods=STANDING + [("commands.base_height.ranges.height", (0.98, 0.98)), ("events.push_robot", None)]),
     "S3": dict(kind="stills", name="S3_envs", num_envs=4096, spacing=2.5, res=(3840, 2160), preroll=0.0,
                dr=True, cam=CAM_GRID_32_3, arrows="both", times=(2.5, 3.0, 3.5, 4.0, 5.0), mods=[]),
 
@@ -283,8 +303,10 @@ parser.add_argument("--heading_stiffness", type=float, default=4.0,
                          "a regime 3-5 deg e comando massimo 0.35 rad/s; col default di Isaac Lab (0.5) 35 deg; "
                          "da 10 in su il comando satura e oscilla. Senza controllo, 223 deg in 30 s.")
 parser.add_argument("--cam_dist", type=float, default=None)
-parser.add_argument("--cam_elev", type=float, default=None, help="Camere 'grid': elevazione [deg].")
-parser.add_argument("--cam_azim", type=float, default=None, help="Direzione della camera [deg], 0 = +x.")
+parser.add_argument("--cam_elev", type=float, default=None,
+                    help="Camere 'grid'/'orbit': elevazione [deg]; 'robot' (S4): beccheggio MuJoCo, negativo = verso il basso.")
+parser.add_argument("--cam_azim", type=float, default=None,
+                    help="Direzione della camera [deg], 0 = +x; 'robot' (S4): direzione di vista MuJoCo rispetto al robot.")
 parser.add_argument("--cam_eye_z", type=float, default=None, help="Camere 'follow': altezza della camera [m].")
 parser.add_argument("--cam_look_z", type=float, default=None, help="Altezza del punto inquadrato [m].")
 parser.add_argument("--cam_smooth", type=float, default=0.4, help="Camere 'follow': costante di tempo [s].")
@@ -314,10 +336,10 @@ parser.add_argument("--robot_color", type=float, default=0.02, help="--look tesi
 parser.add_argument("--robot_roughness", type=float, default=0.45)
 parser.add_argument("--robot_metallic", type=float, default=0.2)
 parser.add_argument("--sun_elev", type=float, default=35.0, help="--look tesi: altezza del sole [deg].")
-parser.add_argument("--sun_rel_azim", type=float, default=135.0,
+parser.add_argument("--sun_rel_azim", type=float, default=None,
                     help="--look tesi: direzione del sole rispetto alla camera [deg]; 135 = dietro il soggetto, "
                          "a destra nell'immagine (ombre verso la camera, come nella foto di riferimento); "
-                         "45 = alle spalle della camera, a destra.")
+                         "45 = alle spalle della camera, a destra. Default: 135, per S4 45.")
 parser.add_argument("--sun_intensity", type=float, default=3000.0)
 parser.add_argument("--sun_angle", type=float, default=0.53, help="Diametro apparente del sole [deg]: ombre nette.")
 parser.add_argument("--sky_intensity", type=float, default=800.0, help="--look tesi: luce diffusa del cielo uniforme.")
@@ -631,6 +653,10 @@ class Camera:
                 print(f"[media] trench: corridoio a x = {self.P['x']:+.2f} m (chiesto {x_req:+.2f})")
         elif args.traj:
             print("[media] --traj ignorato: il preset non ha una camera 'traj'")
+        self.fov = None
+        if self.p.get("vfov") and not args.focal_length:
+            self.fov = set_vfov(self.cam_path, self.p["vfov"], base_env.cfg.viewer.resolution)
+        self.robot_pose = None
         if self.p["mode"] == "orbit":
             c = base_env.scene.env_origins.cpu().numpy().mean(axis=0)
             self.look = np.array([c[0], c[1], self.p["look_z"]])  # il centro della circonferenza
@@ -667,6 +693,16 @@ class Camera:
             self.look = np.array([self.xy[0], self.xy[1], self.p["look_z"]])
             self.eye = np.array([self.xy[0] + self.p["dist"] * math.cos(a),
                                  self.xy[1] + self.p["dist"] * math.sin(a), self.p["eye_z"]])
+        if self.p["mode"] == "robot":  # convenzioni MuJoCo, vedi CAM_S4
+            pos = self.robot.data.root_pos_w[0].cpu().numpy()
+            yaw = float(self.robot.data.heading_w[0])
+            c, s = math.cos(yaw), math.sin(yaw)
+            fw, lf = self.p["look_fwd"], self.p["look_left"]
+            self.look = np.array([pos[0] + c * fw - s * lf, pos[1] + s * fw + c * lf, self.p["look_z"]])
+            a, e = yaw + math.radians(self.p["azim"]), math.radians(self.p["elev"])
+            self.eye = self.look - self.p["dist"] * np.array([math.cos(e) * math.cos(a), math.cos(e) * math.sin(a),
+                                                               math.sin(e)])
+            self.robot_pose = {"base": [round(float(v), 4) for v in pos], "yaw_deg": round(math.degrees(yaw), 2)}
         if self.p["mode"] != "traj":
             self.focus = float(np.linalg.norm(self.eye - self.look))  # fuoco sul bersaglio
         self.sim.set_camera_view(tuple(float(v) for v in self.eye), tuple(float(v) for v in self.look))
@@ -693,6 +729,10 @@ class Camera:
              "lookat": [round(float(v), 3) for v in self.look]}
         if self.p["mode"] == "traj":
             d.update(parametri=self.P, durata_s=self.T, centro=[round(float(v), 3) for v in self.c])
+        if self.fov:
+            d["campo_visivo"] = self.fov
+        if self.robot_pose:
+            d["robot_allo_scatto"] = self.robot_pose
         return d
 
 
@@ -925,6 +965,22 @@ def set_focal_length(cam_prim_path: str, f: float):
     set_cam_attr(cam_prim_path, "focalLength", f)  # stesso problema del fuoco: va nel session layer
 
 
+def set_vfov(cam_prim_path: str, vfov_deg: float, resolution) -> dict:
+    """Campo visivo verticale come in MuJoCo (fovy). Kit tiene fissa l'apertura orizzontale (20.955) e ricava
+    il resto dal formato dell'immagine: si sceglie la focale che da' vfov con l'apertura verticale = orizzontale
+    * H / W, e si scrive anche quella, cosi' il risultato non dipende da quale delle due il renderer usa."""
+    import omni.usd
+
+    ha = float(omni.usd.get_context().get_stage().GetPrimAtPath(cam_prim_path).GetAttribute("horizontalAperture").Get())
+    w, h = resolution
+    va = ha * h / w
+    f = va / (2.0 * math.tan(math.radians(vfov_deg) / 2.0))
+    set_cam_attr(cam_prim_path, "verticalAperture", va)
+    set_cam_attr(cam_prim_path, "focalLength", f)
+    hfov = 2.0 * math.degrees(math.atan(ha / (2.0 * f)))
+    return {"vfov_deg": vfov_deg, "hfov_deg": round(hfov, 2), "focale": round(f, 3), "apertura_o": ha, "apertura_v": round(va, 3)}
+
+
 # --------------------------------------------------------------------------------------------------
 # uscita
 # --------------------------------------------------------------------------------------------------
@@ -1042,6 +1098,10 @@ def main():
     sun, recolored = None, None
     if args_cli.look == "tesi":
         cam_azim = args_cli.cam_azim if args_cli.cam_azim is not None else preset["cam"]["azim"]
+        if preset["cam"]["mode"] == "robot":  # azim = direzione di VISTA rispetto al robot, girato di YAW_MINUS_X
+            cam_azim = math.degrees(YAW_MINUS_X) + cam_azim + 180.0
+        if args_cli.sun_rel_azim is None:
+            args_cli.sun_rel_azim = preset.get("sun_rel_azim", 135.0)
         sun = add_sun(cam_azim, args_cli)
         robot_root = env_cfg.scene.robot.prim_path.replace("{ENV_REGEX_NS}", "/World/envs/env_0")
         recolored = recolor_robot(robot_root.replace("env_.*", "env_0"), args_cli.robot_color,
@@ -1154,6 +1214,11 @@ def main():
                     pos = robot.data.root_pos_w[0].tolist()
                     tele.append([round((i - preroll + 1) * dt, 3), *c, float(h_term.command[0, 0]), v[0], v[1], w[2],
                                  math.degrees(float(robot.data.heading_w[0])), *pos])
+        elif kind == "stills" and i in shots and arrows == "off":  # S4: una sola versione, senza frecce
+            k = shots[i]
+            p = out_path(out_dir, preset["name"] if len(shots) == 1 else f"{preset['name']}_{k}", ".png", args_cli.overwrite)
+            save_png(settle(args_cli.settle), p)
+            files.append(p.name)
         elif kind == "stills" and i in shots:
             k = shots[i]
             on = out_path(out_dir, f"{preset['name']}_frecce_{k}", ".png", args_cli.overwrite)
