@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <spdlog/spdlog.h>
 
 namespace isaaclab
 {
@@ -239,6 +240,16 @@ REGISTER_OBSERVATION(base_height_command)
     const float h_min = range[0].as<float>();  // deepest squat (e.g. 0.55)
     const float h_max = range[1].as<float>();  // nominal / standing (e.g. 0.98)
 
+    // Fermo alla quota minima di camminata: R2 da solo si ferma 1 cm sopra cutoff_height (0.70 ->
+    // 0.71), A + R2 scende oltre fino a h_min. Il centimetro di margine c'e' perche' la rampa procede
+    // a 1 mm per passo in float: un fermo esattamente sul cutoff potrebbe lasciare il target a 0.6999
+    // e il cutoff azzererebbe i comandi di velocita' senza che si veda. Policy senza cutoff_height
+    // nel deploy.yaml -> nessun fermo (h_stop = h_min), comportamento di prima.
+    const auto vel_cmds = env->cfg["commands"]["base_velocity"];
+    const bool has_cutoff = static_cast<bool>(vel_cmds["cutoff_height"]);
+    const float cutoff = has_cutoff ? vel_cmds["cutoff_height"].as<float>() : h_min;
+    const float h_stop = has_cutoff ? std::clamp(cutoff + 0.01f, h_min, h_max) : h_min;
+
     auto & joystick = env->robot->data.joystick;
     const float descend_rate = 0.05f;  // [m/s] descent speed while RT is held
     const float rise_rate = 0.05f;     // [m/s] stand-up speed while B is held (slower -> no overshoot)
@@ -246,11 +257,41 @@ REGISTER_OBSERVATION(base_height_command)
     // RT (R2) is digital on this pad -> "hold to squat": the longer RT is held, the deeper.
     // B -> stand up, RAMPED (not a snap) so the base does not overshoot the nominal height and
     // ring afterwards. Held state lives in env->squat_target.
+    const float prev = env->squat_target;
     if (joystick->B.pressed)
         env->squat_target += rise_rate * env->step_dt;
     else if (joystick->RT.pressed)
-        env->squat_target -= descend_rate * env->step_dt;
+    {
+        // Sotto il fermo R2 da solo non fa nulla (il limite non deve mai riportare il target in su):
+        // per scendere ancora serve A.
+        const float lower = joystick->A.pressed ? h_min : std::min(h_stop, prev);
+        env->squat_target = std::max(prev - descend_rate * env->step_dt, lower);
+    }
     env->squat_target = std::clamp(env->squat_target, h_min, h_max);
+
+    // Quota nel terminale, perche' durante il test non si vede altrimenti: gli eventi subito, durante
+    // la rampa al massimo ogni 0.25 s, e sempre il valore finale quando la rampa si ferma.
+    const float h = env->squat_target;
+    if (env->squat_print_cooldown > 0)
+        env->squat_print_cooldown--;
+    const bool stop_reached = has_cutoff && prev > h_stop && h == h_stop;
+    const bool went_below = has_cutoff && prev >= cutoff && h < cutoff;
+    const bool came_back = has_cutoff && prev < cutoff && h >= cutoff;
+    const bool ramp_tick = h != prev && env->squat_print_cooldown == 0;
+    const bool ramp_end = h == prev && h != env->squat_shown;
+    if (stop_reached)
+        spdlog::info("Squat: height {:.3f} m, stopped at the walking floor (hold A + R2 to go down to {:.2f} m)", h, h_min);
+    else if (went_below)
+        spdlog::warn("Squat: height {:.3f} m, below {:.2f} m: velocity commands DISABLED", h, cutoff);
+    else if (came_back)
+        spdlog::info("Squat: height {:.3f} m, back above {:.2f} m: velocity commands enabled", h, cutoff);
+    else if (ramp_tick || ramp_end)
+        spdlog::info("Squat: height {:.3f} m", h);
+    if (stop_reached || went_below || came_back || ramp_tick || ramp_end)
+    {
+        env->squat_shown = h;
+        env->squat_print_cooldown = static_cast<int>(std::lround(0.25f / env->step_dt));
+    }
 
     std::vector<float> obs(1);
     obs[0] = env->squat_target - nominal;  // matches training obs base_height_command_rel

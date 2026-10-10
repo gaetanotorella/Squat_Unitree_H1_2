@@ -48,7 +48,9 @@ FSM: Start Passive
 
 poi dal radiocomando originale (arriva dal firmware via `LowState`, identico a prima):
 `L2 + su` → FixStand (rampa 3 s) · `R1 + X` → Squat, compare `[deploy_logger] ... exp_<ts>` ·
-`R2` tenuto scende, `B` sale · `L2 + B` → Passive.
+`R2` tenuto scende e si ferma da solo a 0.71 m (quota minima di camminata, `cutoff_height` + 1 cm),
+`A + R2` tenuti scende oltre fino a 0.60, `B` sale · `L2 + B` → Passive. La quota comandata compare nel
+log (`Squat: height ...`), con un avviso quando si scende sotto 0.70 e i comandi di velocità si spengono.
 
 Un `FixStand → Passive` non voluto ha due sole cause: `L2 + B` premuto, oppure `lowstate` fermo
 per > 1000 ms (fallback di sicurezza registrato in `FSMState`). Il log oggi non le distingue.

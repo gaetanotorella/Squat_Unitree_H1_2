@@ -60,6 +60,16 @@ public:
     {
         global_phase = 0;
         episode_length = 0;
+        // Ogni ingresso nello stato RL riparte in piedi (estremo alto dell'intervallo di quota). Senza,
+        // la quota restava quella dell'uscita precedente: Passive a 0.65 -> FixStand -> Squat e il robot
+        // si riaccovacciava da solo. Va fatto prima di observation_manager->reset(), che chiama gia' i
+        // termini (base_height_command compreso).
+        if (cfg["commands"]["base_height"])
+            squat_target = cfg["commands"]["base_height"]["ranges"]["height"][1].as<float>();
+        else
+            squat_target = 0.98f;
+        squat_shown = squat_target;
+        squat_print_cooldown = 0;
         robot->update();
         action_manager->reset();
         observation_manager->reset();
@@ -302,6 +312,8 @@ public:
     long episode_length = 0;
     float global_phase = 0.0f;
     float squat_target = 0.98f;  // squat task: current commanded base height [m] (held between steps)
+    float squat_shown = 0.98f;   // squat task: last height printed to the terminal [m]
+    int squat_print_cooldown = 0;  // squat task: steps before the next periodic height print
 };
 
 };

@@ -49,7 +49,8 @@ int main(int argc, char** argv)
 
     std::cout << "Press [L2 + Up] to enter FixStand mode.\n";
     std::cout << "And then press [R1 + X] to start the Squat controller.\n";
-    std::cout << "Hold [R2] to squat down (deeper the longer held); press [B] to stand up.\n";
+    std::cout << "Hold [R2] to squat down: it stops at the walking floor (cutoff_height + 1 cm).\n";
+    std::cout << "Hold [A + R2] to go deeper, down to the minimum height; hold [B] to stand up.\n";
     std::cout << "Left/right sticks still walk/turn (squat is applied at ~zero velocity).\n";
 
     while (true)

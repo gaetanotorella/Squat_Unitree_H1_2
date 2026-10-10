@@ -180,7 +180,7 @@ tratteggiata accanto al ground truth.
 cd deploy/robots/h1_2_squat && mkdir -p build && cd build && cmake .. && make
 ./h1_2_ctrl_squat --network lo        # 'lo' = loopback per sim2sim; interfaccia reale per sim2real
 ```
-Uso: `[L2 + Up]` → FixStand, poi `[R1 + X]` → Squat; quindi **tieni R2** per accovacciarti, **B** per rialzarti.
+Uso: `[L2 + Up]` → FixStand, poi `[R1 + X]` → Squat; quindi **tieni R2** per accovacciarti (si ferma a `cutoff_height` + 1 cm = 0.71 m, la quota minima di camminata), **A + R2** per scendere oltre fino a h_min, **B** per rialzarti.
 
 > ⚠️ Il C++ non è stato compilato in fase di design: se `make` dà errori (candidati: accessi
 > `joystick->RT.pressed` / `joystick->B.pressed`), vanno risolti sul PC deploy.
