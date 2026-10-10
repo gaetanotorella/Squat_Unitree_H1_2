@@ -36,6 +36,7 @@ chiude, e produce metriche e grafici.
 | `metrics.json` | le metriche fisse, per `compare_runs.py` |
 | `report.md` | le stesse metriche in forma leggibile |
 | `plots/` | i grafici di `analyze_sim.py` |
+| `controller.log`, `simulator.log` | l'uscita dei due processi (quote stampate dal controller, eventi del fermo) |
 
 ## Confronto fra run
 
@@ -48,9 +49,19 @@ rifiuta di confrontare run di protocolli diversi.
 
 ## I protocolli
 
-`protocols/standard_v2.yaml` è quello da usare. `standard_v1.yaml` è conservato **immutato** perché
-i cinque run di confronto del 2026-09-13 (`sim_logs/automatic/`) lo usano, e `compare_runs.py`
-rifiuta di confrontare protocolli diversi.
+`protocols/standard_v3.yaml` è quello da usare dal 2026-10-10. `standard_v1.yaml` è conservato
+**immutato** perché i cinque run di confronto del 2026-09-13 (`sim_logs/automatic/`) lo usano, e
+`standard_v2.yaml` per i run fatti con lui; `compare_runs.py` rifiuta di confrontare protocolli diversi.
+
+**Perché esiste v3 — il fermo di quota del controller.** Dal 2026-10-10 nel controller `R2` da solo
+si ferma a `cutoff_height` + 1 cm (0.71 m con la policy finale), la quota minima di camminata; per
+scendere oltre serve `A + R2`. v3 è v2 con la sezione D a **0.71** invece di 0.74 (la quota a cui
+camminare nei test sul robot reale) e la chiave `stop_height: 0.71`, con cui il joystick scriptato
+fa come una mano: RT fino al fermo, poi A + RT, e all'arrivo sul fermo dall'alto un `overhold` di
+solo RT che lascia il controller esattamente a 0.71. `stop_height` deve valere `cutoff_height` +
+0.01 del `deploy.yaml` della policy: `run_protocol.py` lo controlla e si rifiuta di partire se non
+torna. **I protocolli senza `stop_height`** (v1, v2, smoke, i replay) tengono A premuto con RT in
+ogni discesa: è il controller di prima, quindi comandano ancora le stesse quote.
 
 **Perché esiste v2 — un difetto del banco, non del robot.** Nei cinque run di confronto del
 2026-09-13 le quote intermedie arrivavano più alte del richiesto (0.85 → 0.860, 0.74 → 0.761,
@@ -105,6 +116,9 @@ lo impone.
   `descend_rate` / `rise_rate` in `deploy/include/isaaclab/envs/mdp/observations/observations.h`.
   Il joystick scriptato tiene RT/B finché il **suo modello** del target raggiunge la quota: se le
   due rampe divergono, il controllo sulla quota misurata lo segnala.
+- Il fermo `stop_height` del protocollo deve coincidere con quello del controller
+  (`cutoff_height` + 0.01, `base_height_command` in `observations.h`). `run_protocol.py` lo verifica
+  sulla policy sotto test.
 - Il joystick fisico azzera tutto sotto 0.15 (deadzone in `physics_joystick.h`, messa lì per un
   difetto del pad). Quello scriptato **non** la applica — iniettare valori esatti è meglio — ma
   avvisa al caricamento se il protocollo usa un valore in quella fascia, perché quell'istante non

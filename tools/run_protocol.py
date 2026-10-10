@@ -75,6 +75,19 @@ def main() -> int:
         print(f"ERRORE: nessuna policy trovata in {POLICIES}")
         return 1
 
+    # --- fermo di quota: il protocollo e il controller devono vederlo nello stesso punto ---------
+    # Il controller ferma R2 a cutoff_height + 1 cm (dal deploy.yaml della policy); il joystick
+    # scriptato lo modella con `stop_height`. Se divergono, le quote sotto il fermo arrivano sbagliate
+    # senza nessun errore visibile. Un protocollo SENZA `stop_height` tiene A premuto con RT e non
+    # dipende dal fermo: va bene con qualunque policy.
+    if "stop_height" in proto:
+        dep = yaml.safe_load((policy / "params" / "deploy.yaml").read_text())
+        cutoff = (dep.get("commands", {}).get("base_velocity") or {}).get("cutoff_height")
+        if cutoff is None or abs(float(cutoff) + 0.01 - float(proto["stop_height"])) > 1e-6:
+            print(f"ERRORE: stop_height {proto['stop_height']} nel protocollo, ma la policy ha "
+                  f"cutoff_height {cutoff} (fermo del controller = cutoff_height + 0.01)")
+            return 1
+
     # --- config USA-E-GETTA, generati qui e passati con --config ------------------------------
     # I config di produzione NON vengono mai toccati. Quello del controller in particolare e' lo
     # STESSO file usato con `--network <eth>` sul robot reale: se un test interrotto lo lasciasse
@@ -104,6 +117,13 @@ def main() -> int:
 
     before = {p.name for p in LOGS.glob("sim_*")}
     procs: list[tuple[str, subprocess.Popen]] = []
+    # Uscita dei due processi su FILE, poi copiata nel run. Con una PIPE mai letta, superati i 64 kB
+    # del buffer il processo si blocca sulla scrittura: il controller ora stampa la quota durante
+    # ogni rampa, e con il suo thread di policy fermo il robot in sim resterebbe senza comandi.
+    # Cartella separata da `tmp`, che il finally cancella prima che si conosca la cartella del run.
+    out_dir = Path(tempfile.mkdtemp(prefix="h1_2_protocol_out_"))
+    ctrl_log = open(out_dir / "controller.log", "w")
+    sim_log = open(out_dir / "simulator.log", "w")
     t0 = time.time()
     try:
         print(f"protocollo : {protocol.name}  (stop_at {stop_at:.0f} s)")
@@ -111,16 +131,17 @@ def main() -> int:
         print("avvio controller...")
         ctrl = subprocess.Popen([str(CTRL_BIN), "--network", "lo", "--config", str(ctrl_cfg_path)],
                                 cwd=CTRL_BIN.parent,
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                                stdout=ctrl_log, stderr=subprocess.STDOUT, text=True)
         procs.append(("controller", ctrl))
         time.sleep(2.0)
         if ctrl.poll() is not None:
-            print("ERRORE: il controller e' uscito subito:\n" + (ctrl.stdout.read() or ""))
+            ctrl_log.flush()
+            print("ERRORE: il controller e' uscito subito:\n" + (out_dir / "controller.log").read_text())
             return 1
 
         print("avvio simulatore...")
         sim = subprocess.Popen([str(SIM_BIN), "--config", str(sim_cfg_path)], cwd=SIM_DIR,
-                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                               stdout=sim_log, stderr=subprocess.STDOUT, text=True)
         procs.append(("simulatore", sim))
         t_sim = time.time()   # il protocollo parte da qui, non da quando e' partito il controller
 
@@ -148,6 +169,8 @@ def main() -> int:
         for name, p in reversed(procs):
             if p.poll() is None:
                 p.kill()
+        ctrl_log.close()
+        sim_log.close()
         if not args.keep_config:
             shutil.rmtree(tmp, ignore_errors=True)
         else:
@@ -158,11 +181,15 @@ def main() -> int:
     created = sorted(after - before)
     if not created:
         print("ERRORE: nessuna cartella sim_* creata; il simulatore non ha loggato nulla")
+        print(f"uscita di controller e simulatore in {out_dir}")
         return 1
     run_dir = LOGS / created[-1]
     print(f"run        : {run_dir}")
 
     shutil.copy(protocol, run_dir / "protocol.yaml")
+    for f in ("controller.log", "simulator.log"):
+        shutil.move(str(out_dir / f), str(run_dir / f))
+    shutil.rmtree(out_dir, ignore_errors=True)
 
     def git(*a):
         try:
