@@ -18,7 +18,9 @@ from isaaclab.utils import configclass
 from unitree_rl_lab.assets.robots import unitree_actuators
 
 UNITREE_MODEL_DIR = "path/to/unitree_model"  # Replace with the actual path to your unitree_model directory
-UNITREE_ROS_DIR = "/home/prisma-lab-ws/Scrivania/GaetanoTorella/unitree_ros"
+# Dal 2026-10 il training gira nel container docker/isaaclab-2.3.2, che monta unitree_ros in
+# /workspace/unitree_ros e imposta UNITREE_ROS_DIR; il default resta il percorso del vecchio PC di training.
+UNITREE_ROS_DIR = os.environ.get("UNITREE_ROS_DIR", "/home/prisma-lab-ws/Scrivania/GaetanoTorella/unitree_ros")
 
 
 @configclass

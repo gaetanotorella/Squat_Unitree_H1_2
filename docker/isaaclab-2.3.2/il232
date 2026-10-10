@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Lancia un comando nell'immagine Isaac Sim 5.1.0 + Isaac Lab 2.3.2 (l'equivalente del comando `isaaclab`
+# del lab, ma con lo stack della tesi). Ogni chiamata e' un container nuovo, cancellato all'uscita (--rm):
+# resta solo cio' che sta nelle cartelle montate.
+#
+#   il232                          shell nel container (python: /isaac-sim/python.sh)
+#   il232 python <script> [...]    python di Isaac Sim, dalla radice del repo
+#   il232 tensorboard [porta]      TensorBoard su logs/rsl_rl, su 127.0.0.1:<porta> del server (default 6006)
+#   il232 <comando> [...]          qualunque altro comando
+#
+# Percorsi (variabili d'ambiente per cambiarli):
+#   IL232_REPO          ~/projects/Squat_Unitree_H1_2  -> /workspace/Squat_Unitree_H1_2 (lettura/scrittura)
+#   IL232_UNITREE_ROS   ~/projects/unitree_ros         -> /workspace/unitree_ros        (sola lettura)
+#   IL232_DATA          ~/docker/isaaclab-2.3.2        -> cache di Isaac Sim (shader, warp, log di Kit)
+set -euo pipefail
+
+IMAGE="${IL232_IMAGE:-${USER}-isaaclab:2.3.2}"
+DATA="${IL232_DATA:-$HOME/docker/isaaclab-2.3.2}"
+REPO="${IL232_REPO:-$HOME/projects/Squat_Unitree_H1_2}"
+UROS="${IL232_UNITREE_ROS:-$HOME/projects/unitree_ros}"
+
+[ -d "$DATA/cache/main" ] || { echo "cache non preparate in $DATA: lancia prima setup_host.sh"; exit 1; }
+[ -d "$REPO/source/unitree_rl_lab" ] || { echo "repo non trovato in $REPO (o imposta IL232_REPO)"; exit 1; }
+[ -f "$UROS/robots/h1_2_description/h1_2_handless.urdf" ] || {
+    echo "URDF dell'H1_2 non trovato in $UROS (o imposta IL232_UNITREE_ROS)"; exit 1; }
+docker image inspect "$IMAGE" >/dev/null 2>&1 || { echo "immagine $IMAGE assente: lancia prima build.sh"; exit 1; }
+
+args=(--rm --gpus all -u 1234:1234
+      --name "${USER}-il232-$$" --label "owner=${USER}" --label "purpose=tesi-isaaclab-2.3.2"
+      -e ACCEPT_EULA=Y -e PRIVACY_CONSENT=Y
+      -v "$DATA/cache/main:/isaac-sim/.cache:rw"
+      -v "$DATA/cache/computecache:/isaac-sim/.nv/ComputeCache:rw"
+      -v "$DATA/logs:/isaac-sim/.nvidia-omniverse/logs:rw"
+      -v "$DATA/config:/isaac-sim/.nvidia-omniverse/config:rw"
+      -v "$DATA/data:/isaac-sim/.local/share/ov/data:rw"
+      -v "$DATA/pkg:/isaac-sim/.local/share/ov/pkg:rw"
+      -v "$REPO:/workspace/Squat_Unitree_H1_2:rw"
+      -v "$UROS:/workspace/unitree_ros:ro"
+      -w /workspace/Squat_Unitree_H1_2)
+# terminale solo se ce n'e' uno (tmux lo e'): senza, `il232 python ...` funziona anche da script
+if [ -t 0 ] && [ -t 1 ]; then args+=(-it); fi
+
+case "${1:-}" in
+    "")
+        exec docker run "${args[@]}" "$IMAGE" bash ;;
+    python)
+        shift
+        exec docker run "${args[@]}" "$IMAGE" /isaac-sim/python.sh "$@" ;;
+    tensorboard)
+        port="${2:-6006}"
+        echo "TensorBoard su 127.0.0.1:${port} del server; dal tuo PC: ssh -L ${port}:localhost:${port} <server>"
+        exec docker run "${args[@]}" -p "127.0.0.1:${port}:6006" "$IMAGE" \
+            /isaac-sim/python.sh -m tensorboard.main --logdir logs/rsl_rl --host 0.0.0.0 --port 6006 ;;
+    *)
+        exec docker run "${args[@]}" "$IMAGE" "$@" ;;
+esac
